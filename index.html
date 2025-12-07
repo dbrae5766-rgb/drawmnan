@@ -374,31 +374,36 @@
             let lastCheck = Date.now();
             
             listenInterval = setInterval(async () => {
-                if (isConnected && !isDrawing) {
+                if (isConnected) {
                     try {
-                        // Check for new lines using timestamp filter
-                        const response = await fetch(`${linesRef}?orderBy="timestamp"&startAt=${lastCheck - 1000}`);
-                        const data = await response.json();
-                        
-                        if (data) {
-                            const newLines = Object.entries(data)
-                                .map(([id, line]) => ({ ...line, id }))
-                                .filter(line => line.sessionId !== sessionId)
-                                .sort((a, b) => a.timestamp - b.timestamp);
+                        // Only check for new lines when not drawing
+                        if (!isDrawing) {
+                            const response = await fetch(`${linesRef}?orderBy="timestamp"&startAt=${lastCheck - 1000}`);
+                            const data = await response.json();
                             
-                            newLines.forEach(line => {
-                                drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                            });
+                            if (data) {
+                                const newLines = Object.entries(data)
+                                    .map(([id, line]) => ({ ...line, id }))
+                                    .filter(line => line.sessionId !== sessionId)
+                                    .sort((a, b) => a.timestamp - b.timestamp);
+                                
+                                newLines.forEach(line => {
+                                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                                });
+                            }
+                            
+                            lastCheck = Date.now();
                         }
-                        
-                        lastCheck = Date.now();
                         
                         // Check for clear signal
                         const clearResponse = await fetch(clearRef);
                         const clearData = await clearResponse.json();
-                        if (clearData && clearData.timestamp > (window.lastClearTime || 0)) {
+                        if (clearData && clearData.timestamp && clearData.timestamp > (window.lastClearTime || 0)) {
                             window.lastClearTime = clearData.timestamp;
                             ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            history = [];
+                            historyStep = -1;
+                            updateUndoRedoButtons();
                             status.textContent = '🟢 Canvas Cleared';
                             setTimeout(() => status.textContent = '🟢 Live', 1000);
                         }
