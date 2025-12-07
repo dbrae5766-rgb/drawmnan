@@ -240,9 +240,11 @@
         let currentTool = 'draw';
         let lastX = 0;
         let lastY = 0;
-        let history = [];
-        let historyStep = -1;
-        let currentStroke = [];
+
+        // Local undo/redo - only for your own strokes
+        let myStrokes = [];
+        let myUndoStack = [];
+        let myRedoStack = [];
 
         let scale = 1;
         let translateX = 0;
@@ -269,6 +271,7 @@
         let sessionId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
         let syncInterval = null;
         let listenInterval = null;
+        let allDrawnLines = new Set(); // Track all line IDs we've drawn to avoid duplicates
 
         // Check if user is admin (IP: 69.170.112.226)
         async function checkAdminStatus() {
@@ -297,7 +300,7 @@
                     isConnected = true;
                     status.textContent = '🟢 Connected';
                     status.classList.remove('error');
-                    loadFromFirebase();
+                    await loadAllFromFirebase();
                     startRealtimeListener();
                 } else {
                     status.textContent = '⚠️ Connection Failed';
@@ -310,31 +313,47 @@
             }
         }
 
-        async function loadFromFirebase() {
+        // Load ALL existing lines from Firebase on startup
+        async function loadAllFromFirebase() {
             if (!isConnected) return;
             try {
                 const response = await fetch(linesRef);
                 const data = await response.json();
                 if (data) {
-                    const lines = Object.entries(data).map(([id, line]) => ({
-                        ...line,
-                        id: id
-                    })).sort((a, b) => a.timestamp - b.timestamp);
+                    const lines = Object.entries(data)
+                        .map(([id, line]) => ({ ...line, id: id }))
+                        .sort((a, b) => a.timestamp - b.timestamp);
                     
                     lines.forEach(line => {
-                        drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                        if (!allDrawnLines.has(line.id)) {
+                            drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                            allDrawnLines.add(line.id);
+                        }
                     });
                     
                     if (lines.length > 0) {
-                        lastLineId = Math.max(...lines.map(l => parseInt(l.id.split('-')[0]) || 0));
+                        const maxId = Math.max(...lines.map(l => {
+                            const parts = l.id.split('-');
+                            return parseInt(parts[0]) || 0;
+                        }));
+                        lastLineId = maxId + 1;
                     }
+                }
+                
+                // Initialize lastClearTime
+                const clearResponse = await fetch(clearRef);
+                const clearData = await clearResponse.json();
+                if (clearData && clearData.timestamp) {
+                    window.lastClearTime = clearData.timestamp;
+                } else {
+                    window.lastClearTime = 0;
                 }
             } catch (error) {
                 console.error('Load error:', error);
             }
         }
 
-        // Send lines in batches every 50ms for ultra-fast real-time drawing
+        // Send lines in batches every 100ms for real-time drawing
         function startBatchSync() {
             if (syncInterval) return;
             syncInterval = setInterval(async () => {
@@ -343,11 +362,11 @@
                     lineBuffer = [];
                     
                     try {
-                        // Send multiple lines at once using PATCH for speed
                         const updates = {};
                         batch.forEach(line => {
                             const id = `${lastLineId++}-${sessionId}`;
                             updates[id] = line;
+                            allDrawnLines.add(id);
                         });
                         
                         await fetch(linesRef, {
@@ -362,37 +381,31 @@
                         console.error('Batch sync error:', error);
                         status.textContent = '⚠️ Sync Failed';
                         status.classList.add('error');
-                        // Put lines back if failed
                         lineBuffer = [...batch, ...lineBuffer];
                     }
                 }
-            }, 50); // Sync every 50ms for near-instant updates
+            }, 100);
         }
 
-        // Listen for new lines every 200ms
+        // Listen for new lines every 300ms
         function startRealtimeListener() {
-            let lastCheck = Date.now();
-            
             listenInterval = setInterval(async () => {
                 if (isConnected) {
                     try {
-                        // Only check for new lines when not drawing
-                        if (!isDrawing) {
-                            const response = await fetch(`${linesRef}?orderBy="timestamp"&startAt=${lastCheck - 1000}`);
-                            const data = await response.json();
+                        // Get ALL lines and only draw ones we haven't seen
+                        const response = await fetch(linesRef);
+                        const data = await response.json();
+                        
+                        if (data) {
+                            const allLines = Object.entries(data)
+                                .map(([id, line]) => ({ ...line, id }))
+                                .filter(line => !allDrawnLines.has(line.id))
+                                .sort((a, b) => a.timestamp - b.timestamp);
                             
-                            if (data) {
-                                const newLines = Object.entries(data)
-                                    .map(([id, line]) => ({ ...line, id }))
-                                    .filter(line => line.sessionId !== sessionId)
-                                    .sort((a, b) => a.timestamp - b.timestamp);
-                                
-                                newLines.forEach(line => {
-                                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                                });
-                            }
-                            
-                            lastCheck = Date.now();
+                            allLines.forEach(line => {
+                                drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                                allDrawnLines.add(line.id);
+                            });
                         }
                         
                         // Check for clear signal
@@ -401,11 +414,19 @@
                         if (clearData && clearData.timestamp && clearData.timestamp > (window.lastClearTime || 0)) {
                             window.lastClearTime = clearData.timestamp;
                             ctx.clearRect(0, 0, canvas.width, canvas.height);
-                            history = [];
-                            historyStep = -1;
+                            allDrawnLines.clear();
+                            myStrokes = [];
+                            myUndoStack = [];
+                            myRedoStack = [];
                             updateUndoRedoButtons();
                             status.textContent = '🟢 Canvas Cleared';
-                            setTimeout(() => status.textContent = '🟢 Live', 1000);
+                            setTimeout(() => {
+                                if (isAdmin) {
+                                    status.textContent = '👑 Admin Mode';
+                                } else {
+                                    status.textContent = '🟢 Live';
+                                }
+                            }, 1000);
                         }
                         
                         // Check for other users' cursors
@@ -418,7 +439,7 @@
                         console.error('Listener error:', error);
                     }
                 }
-            }, 200); // Check every 200ms for ultra-responsive updates
+            }, 300);
         }
 
         // Color buttons
@@ -454,7 +475,6 @@
             brushSize = parseInt(e.target.value);
             sizeValue.textContent = brushSize;
             
-            // Visual feedback for large sizes in admin mode
             if (isAdmin && brushSize > 100) {
                 sizeValue.style.fontWeight = 'bold';
                 sizeValue.style.color = '#e65100';
@@ -483,9 +503,8 @@
                 const coords = getCanvasCoords(e.clientX, e.clientY);
                 lastX = coords.x;
                 lastY = coords.y;
-                currentStroke = [];
+                myStrokes = []; // Start new stroke
                 
-                // Send cursor position when starting to draw (especially for mobile)
                 if (isMobile) {
                     updateCursorPosition(coords.x, coords.y, true);
                 }
@@ -500,10 +519,8 @@
             if (currentTool === 'draw' && isDrawing) {
                 const coords = getCanvasCoords(e.clientX, e.clientY);
                 
-                // Draw immediately locally
                 drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
                 
-                // Add to buffer for syncing (draws as you draw, not on release)
                 const line = {
                     x1: lastX,
                     y1: lastY,
@@ -515,7 +532,7 @@
                     sessionId: sessionId
                 };
                 lineBuffer.push(line);
-                currentStroke.push(line);
+                myStrokes.push(line);
                 
                 lastX = coords.x;
                 lastY = coords.y;
@@ -527,13 +544,12 @@
         }
 
         function stopDrawing() {
-            if (isDrawing && currentStroke.length > 0) {
-                history.push([...currentStroke]);
-                historyStep = history.length - 1;
-                currentStroke = [];
+            if (isDrawing && myStrokes.length > 0) {
+                myUndoStack.push([...myStrokes]);
+                myRedoStack = []; // Clear redo when new stroke made
+                myStrokes = [];
                 updateUndoRedoButtons();
                 
-                // Hide cursor for mobile users when they stop drawing
                 if (isMobile) {
                     updateCursorPosition(0, 0, false);
                 }
@@ -554,14 +570,62 @@
         }
 
         function updateUndoRedoButtons() {
-            undoBtn.disabled = history.length === 0;
-            redoBtn.disabled = true; // Redo disabled in real-time mode
+            undoBtn.disabled = myUndoStack.length === 0;
+            redoBtn.disabled = myRedoStack.length === 0;
         }
+
+        // Undo - only undoes YOUR strokes locally (doesn't remove from Firebase)
+        async function undo() {
+            if (myUndoStack.length > 0) {
+                const lastStroke = myUndoStack.pop();
+                myRedoStack.push(lastStroke);
+                updateUndoRedoButtons();
+                
+                // Redraw entire canvas from Firebase
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                allDrawnLines.clear();
+                await loadAllFromFirebase();
+                
+                // Redraw all except the undone strokes
+                const undoneLineIds = new Set();
+                myRedoStack.forEach(stroke => {
+                    stroke.forEach(line => {
+                        if (line.firebaseId) undoneLineIds.add(line.firebaseId);
+                    });
+                });
+            }
+        }
+
+        // Redo - redraws your undone strokes
+        function redo() {
+            if (myRedoStack.length > 0) {
+                const stroke = myRedoStack.pop();
+                myUndoStack.push(stroke);
+                updateUndoRedoButtons();
+                
+                stroke.forEach(line => {
+                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                });
+            }
+        }
+
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                undo();
+            } else if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+                e.preventDefault();
+                redo();
+            }
+        });
 
         // Update cursor position to Firebase
         async function updateCursorPosition(x, y, visible) {
             const now = Date.now();
-            if (now - lastCursorUpdate < 50 && visible) return; // Throttle to 20 updates/sec
+            if (now - lastCursorUpdate < 100 && visible) return;
             lastCursorUpdate = now;
             
             if (isConnected) {
@@ -590,10 +654,9 @@
             const activeSessions = new Set();
             
             Object.entries(cursorsData).forEach(([sid, cursor]) => {
-                if (sid === sessionId) return; // Skip own cursor
-                if (now - cursor.timestamp > 3000) return; // Ignore stale cursors (>3sec old)
-                if (!cursor.visible) return; // Skip invisible cursors
-                if (cursor.isMobile && !cursor.visible) return; // Mobile users only show when drawing
+                if (sid === sessionId) return;
+                if (now - cursor.timestamp > 5000) return;
+                if (!cursor.visible) return;
                 
                 activeSessions.add(sid);
                 
@@ -606,7 +669,6 @@
                     userCursors.set(sid, cursorEl);
                 }
                 
-                // Position cursor with zoom and pan
                 const screenX = cursor.x * scale + translateX;
                 const screenY = cursor.y * scale + translateY;
                 
@@ -616,7 +678,6 @@
                 cursorEl.style.display = 'block';
             });
             
-            // Remove cursors for users who left or stopped drawing
             userCursors.forEach((cursorEl, sid) => {
                 if (!activeSessions.has(sid)) {
                     cursorEl.style.display = 'none';
@@ -633,33 +694,6 @@
                 }
             });
         }
-
-        function undo() {
-            if (history.length > 0) {
-                history.pop();
-                historyStep = history.length - 1;
-                redrawFromHistory();
-                updateUndoRedoButtons();
-            }
-        }
-
-        function redrawFromHistory() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            history.forEach(stroke => {
-                stroke.forEach(line => {
-                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                });
-            });
-        }
-
-        undoBtn.addEventListener('click', undo);
-
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
-                e.preventDefault();
-                undo();
-            }
-        });
 
         // Zoom
         canvas.addEventListener('wheel', (e) => {
@@ -685,7 +719,8 @@
                 isDrawing = true;
                 lastX = coords.x;
                 lastY = coords.y;
-                currentStroke = [];
+                myStrokes = [];
+                updateCursorPosition(coords.x, coords.y, true);
             } else if (e.touches.length === 1 && currentTool === 'pan') {
                 const touch = e.touches[0];
                 isPanning = true;
@@ -723,9 +758,7 @@
                     sessionId: sessionId
                 };
                 lineBuffer.push(line);
-                currentStroke.push(line);
-                
-                // Update cursor position while drawing on mobile
+                myStrokes.push(line);
                 updateCursorPosition(coords.x, coords.y, true);
                 
                 lastX = coords.x;
@@ -759,13 +792,12 @@
         canvas.addEventListener('touchend', (e) => {
             e.preventDefault();
             if (e.touches.length === 0) {
-                if (isDrawing && currentStroke.length > 0) {
-                    history.push([...currentStroke]);
-                    historyStep = history.length - 1;
-                    currentStroke = [];
+                if (isDrawing && myStrokes.length > 0) {
+                    myUndoStack.push([...myStrokes]);
+                    myRedoStack = [];
+                    myStrokes = [];
                     updateUndoRedoButtons();
                     
-                    // Hide cursor when mobile user stops drawing
                     if (isMobile) {
                         updateCursorPosition(0, 0, false);
                     }
@@ -783,41 +815,16 @@
         clearBtn.addEventListener('click', async () => {
             if (confirm('Clear the canvas for everyone? This cannot be undone!')) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                history = [];
-                historyStep = -1;
+                allDrawnLines.clear();
+                myStrokes = [];
+                myUndoStack = [];
+                myRedoStack = [];
                 updateUndoRedoButtons();
                 
                 if (isConnected) {
                     try {
-                        // Delete all lines
                         await fetch(linesRef, { method: 'DELETE' });
                         
-                        // Send clear signal to all users
                         await fetch(clearRef, {
                             method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ timestamp: Date.now() })
-                        });
-                        
-                        window.lastClearTime = Date.now();
-                        lastLineId = 0;
-                        status.textContent = '🟢 Cleared for All';
-                        setTimeout(() => status.textContent = '🟢 Live', 1500);
-                    } catch (error) {
-                        console.error('Clear error:', error);
-                        status.textContent = '⚠️ Clear Failed';
-                        status.classList.add('error');
-                    }
-                }
-            }
-        });
-
-        // Initialize
-        updateTransform();
-        updateUndoRedoButtons();
-        checkAdminStatus();
-        initFirebase();
-        startBatchSync();
-    </script>
-</body>
-</html>
+                            headers: { '
