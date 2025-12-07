@@ -185,22 +185,7 @@
     <div id="zoomInfo">Zoom: 100%</div>
 
     <script type="module">
-        // ============================================
-        // FIREBASE CONFIGURATION - REPLACE THIS URL
-        // ============================================
-        // Step 1: Go to https://console.firebase.google.com
-        // Step 2: Create a new project (or use existing)
-        // Step 3: Click "Realtime Database" in left menu
-        // Step 4: Click "Create Database"
-        // Step 5: Choose location and "Start in test mode"
-        // Step 6: Copy your database URL (looks like: https://YOUR-PROJECT-NAME.firebaseio.com)
-        // Step 7: Paste it below, replacing the placeholder
-        
         const FIREBASE_DB_URL = 'https://drawing-ce2f6-default-rtdb.firebaseio.com';
-        
-        // ============================================
-        // DON'T EDIT BELOW THIS LINE
-        // ============================================
 
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
@@ -241,28 +226,26 @@
         let initialPinchDistance = 0;
         let lastScale = 1;
 
-        // Firebase connection
-        const dbRef = FIREBASE_DB_URL + '/strokes.json';
+        // Firebase connection - optimized for real-time
+        const linesRef = FIREBASE_DB_URL + '/lines.json';
+        const clearRef = FIREBASE_DB_URL + '/clearSignal.json';
         let isConnected = false;
-        let lastStrokeCount = 0;
+        let lineBuffer = [];
+        let lastLineId = 0;
+        let sessionId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        let syncInterval = null;
+        let listenInterval = null;
 
         // Initialize Firebase connection
         async function initFirebase() {
-            if (FIREBASE_DB_URL === 'https://YOUR-PROJECT-NAME.firebaseio.com') {
-                status.textContent = '⚠️ Configure Firebase';
-                status.classList.add('error');
-                console.error('Please configure your Firebase URL in the code!');
-                return;
-            }
-
             try {
-                const response = await fetch(dbRef);
+                const response = await fetch(linesRef);
                 if (response.ok) {
                     isConnected = true;
                     status.textContent = '🟢 Connected';
                     status.classList.remove('error');
                     loadFromFirebase();
-                    startFirebaseListener();
+                    startRealtimeListener();
                 } else {
                     status.textContent = '⚠️ Connection Failed';
                     status.classList.add('error');
@@ -277,61 +260,100 @@
         async function loadFromFirebase() {
             if (!isConnected) return;
             try {
-                const response = await fetch(dbRef);
+                const response = await fetch(linesRef);
                 const data = await response.json();
                 if (data) {
-                    const strokes = Object.values(data);
-                    history = strokes;
-                    historyStep = history.length - 1;
-                    lastStrokeCount = history.length;
-                    redrawCanvas();
-                    updateUndoRedoButtons();
+                    const lines = Object.entries(data).map(([id, line]) => ({
+                        ...line,
+                        id: id
+                    })).sort((a, b) => a.timestamp - b.timestamp);
+                    
+                    lines.forEach(line => {
+                        drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                    });
+                    
+                    if (lines.length > 0) {
+                        lastLineId = Math.max(...lines.map(l => parseInt(l.id.split('-')[0]) || 0));
+                    }
                 }
             } catch (error) {
                 console.error('Load error:', error);
             }
         }
 
-        async function saveStrokeToFirebase(stroke) {
-            if (!isConnected) return;
-            try {
-                await fetch(dbRef, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(stroke)
-                });
-                status.textContent = '🟢 Synced';
-                status.classList.remove('error');
-            } catch (error) {
-                console.error('Save error:', error);
-                status.textContent = '⚠️ Sync Failed';
-                status.classList.add('error');
-            }
+        // Send lines in batches every 50ms for ultra-fast real-time drawing
+        function startBatchSync() {
+            if (syncInterval) return;
+            syncInterval = setInterval(async () => {
+                if (lineBuffer.length > 0 && isConnected) {
+                    const batch = [...lineBuffer];
+                    lineBuffer = [];
+                    
+                    try {
+                        // Send multiple lines at once using PATCH for speed
+                        const updates = {};
+                        batch.forEach(line => {
+                            const id = `${lastLineId++}-${sessionId}`;
+                            updates[id] = line;
+                        });
+                        
+                        await fetch(linesRef, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(updates)
+                        });
+                        
+                        status.textContent = '🟢 Live';
+                        status.classList.remove('error');
+                    } catch (error) {
+                        console.error('Batch sync error:', error);
+                        status.textContent = '⚠️ Sync Failed';
+                        status.classList.add('error');
+                        // Put lines back if failed
+                        lineBuffer = [...batch, ...lineBuffer];
+                    }
+                }
+            }, 50); // Sync every 50ms for near-instant updates
         }
 
-        function startFirebaseListener() {
-            // Poll for updates every 2 seconds
-            setInterval(async () => {
-                if (!isDrawing && isConnected) {
+        // Listen for new lines every 200ms
+        function startRealtimeListener() {
+            let lastCheck = Date.now();
+            
+            listenInterval = setInterval(async () => {
+                if (isConnected && !isDrawing) {
                     try {
-                        const response = await fetch(dbRef);
+                        // Check for new lines using timestamp filter
+                        const response = await fetch(`${linesRef}?orderBy="timestamp"&startAt=${lastCheck - 1000}`);
                         const data = await response.json();
+                        
                         if (data) {
-                            const strokes = Object.values(data);
-                            if (strokes.length > lastStrokeCount) {
-                                // New strokes added by other users
-                                lastStrokeCount = strokes.length;
-                                history = strokes;
-                                historyStep = history.length - 1;
-                                redrawCanvas();
-                                updateUndoRedoButtons();
-                            }
+                            const newLines = Object.entries(data)
+                                .map(([id, line]) => ({ ...line, id }))
+                                .filter(line => line.sessionId !== sessionId)
+                                .sort((a, b) => a.timestamp - b.timestamp);
+                            
+                            newLines.forEach(line => {
+                                drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                            });
+                        }
+                        
+                        lastCheck = Date.now();
+                        
+                        // Check for clear signal
+                        const clearResponse = await fetch(clearRef);
+                        const clearData = await clearResponse.json();
+                        if (clearData && clearData.timestamp > (window.lastClearTime || 0)) {
+                            window.lastClearTime = clearData.timestamp;
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            status.textContent = '🟢 Canvas Cleared';
+                            setTimeout(() => status.textContent = '🟢 Live', 1000);
                         }
                     } catch (error) {
                         console.error('Listener error:', error);
                     }
                 }
-            }, 2000);
+            }, 200); // Check every 200ms for ultra-responsive updates
         }
 
         // Color buttons
@@ -349,7 +371,6 @@
             colorPalette.appendChild(btn);
         });
 
-        // Tool switching
         drawBtn.addEventListener('click', () => {
             currentTool = 'draw';
             drawBtn.classList.add('active');
@@ -388,11 +409,7 @@
                 const coords = getCanvasCoords(e.clientX, e.clientY);
                 lastX = coords.x;
                 lastY = coords.y;
-                currentStroke = [{
-                    x1: coords.x, y1: coords.y,
-                    x2: coords.x, y2: coords.y,
-                    color: currentColor, size: brushSize
-                }];
+                currentStroke = [];
             } else if (currentTool === 'pan') {
                 isPanning = true;
                 panStartX = e.clientX - translateX;
@@ -403,12 +420,24 @@
         function draw(e) {
             if (currentTool === 'draw' && isDrawing) {
                 const coords = getCanvasCoords(e.clientX, e.clientY);
+                
+                // Draw immediately locally
                 drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
-                currentStroke.push({
-                    x1: lastX, y1: lastY,
-                    x2: coords.x, y2: coords.y,
-                    color: currentColor, size: brushSize
-                });
+                
+                // Add to buffer for syncing (draws as you draw, not on release)
+                const line = {
+                    x1: lastX,
+                    y1: lastY,
+                    x2: coords.x,
+                    y2: coords.y,
+                    color: currentColor,
+                    size: brushSize,
+                    timestamp: Date.now(),
+                    sessionId: sessionId
+                };
+                lineBuffer.push(line);
+                currentStroke.push(line);
+                
                 lastX = coords.x;
                 lastY = coords.y;
             } else if (currentTool === 'pan' && isPanning) {
@@ -420,11 +449,8 @@
 
         function stopDrawing() {
             if (isDrawing && currentStroke.length > 0) {
-                historyStep++;
-                history = history.slice(0, historyStep);
                 history.push([...currentStroke]);
-                lastStrokeCount = history.length;
-                saveStrokeToFirebase(currentStroke);
+                historyStep = history.length - 1;
                 currentStroke = [];
                 updateUndoRedoButtons();
             }
@@ -443,47 +469,35 @@
             ctx.stroke();
         }
 
-        function redrawCanvas() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            for (let i = 0; i <= historyStep; i++) {
-                const stroke = history[i];
-                stroke.forEach(line => {
-                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                });
-            }
-        }
-
         function updateUndoRedoButtons() {
-            undoBtn.disabled = historyStep < 0;
-            redoBtn.disabled = historyStep >= history.length - 1;
+            undoBtn.disabled = history.length === 0;
+            redoBtn.disabled = true; // Redo disabled in real-time mode
         }
 
         function undo() {
-            if (historyStep >= 0) {
-                historyStep--;
-                redrawCanvas();
+            if (history.length > 0) {
+                history.pop();
+                historyStep = history.length - 1;
+                redrawFromHistory();
                 updateUndoRedoButtons();
             }
         }
 
-        function redo() {
-            if (historyStep < history.length - 1) {
-                historyStep++;
-                redrawCanvas();
-                updateUndoRedoButtons();
-            }
+        function redrawFromHistory() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            history.forEach(stroke => {
+                stroke.forEach(line => {
+                    drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+                });
+            });
         }
 
         undoBtn.addEventListener('click', undo);
-        redoBtn.addEventListener('click', redo);
 
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
                 e.preventDefault();
                 undo();
-            } else if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-                e.preventDefault();
-                redo();
             }
         });
 
@@ -511,11 +525,7 @@
                 isDrawing = true;
                 lastX = coords.x;
                 lastY = coords.y;
-                currentStroke = [{
-                    x1: coords.x, y1: coords.y,
-                    x2: coords.x, y2: coords.y,
-                    color: currentColor, size: brushSize
-                }];
+                currentStroke = [];
             } else if (e.touches.length === 1 && currentTool === 'pan') {
                 const touch = e.touches[0];
                 isPanning = true;
@@ -539,12 +549,22 @@
             if (e.touches.length === 1 && currentTool === 'draw' && isDrawing) {
                 const touch = e.touches[0];
                 const coords = getCanvasCoords(touch.clientX, touch.clientY);
+                
                 drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
-                currentStroke.push({
-                    x1: lastX, y1: lastY,
-                    x2: coords.x, y2: coords.y,
-                    color: currentColor, size: brushSize
-                });
+                
+                const line = {
+                    x1: lastX,
+                    y1: lastY,
+                    x2: coords.x,
+                    y2: coords.y,
+                    color: currentColor,
+                    size: brushSize,
+                    timestamp: Date.now(),
+                    sessionId: sessionId
+                };
+                lineBuffer.push(line);
+                currentStroke.push(line);
+                
                 lastX = coords.x;
                 lastY = coords.y;
             } else if (e.touches.length === 1 && currentTool === 'pan' && isPanning) {
@@ -577,11 +597,8 @@
             e.preventDefault();
             if (e.touches.length === 0) {
                 if (isDrawing && currentStroke.length > 0) {
-                    historyStep++;
-                    history = history.slice(0, historyStep);
                     history.push([...currentStroke]);
-                    lastStrokeCount = history.length;
-                    saveStrokeToFirebase(currentStroke);
+                    historyStep = history.length - 1;
                     currentStroke = [];
                     updateUndoRedoButtons();
                 }
@@ -590,7 +607,6 @@
             }
         }, { passive: false });
 
-        // Mouse events
         canvas.addEventListener('mousedown', startDrawing);
         canvas.addEventListener('mousemove', draw);
         canvas.addEventListener('mouseup', stopDrawing);
@@ -601,12 +617,29 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 history = [];
                 historyStep = -1;
-                lastStrokeCount = 0;
                 updateUndoRedoButtons();
+                
                 if (isConnected) {
-                    await fetch(FIREBASE_DB_URL + '/strokes.json', {
-                        method: 'DELETE'
-                    });
+                    try {
+                        // Delete all lines
+                        await fetch(linesRef, { method: 'DELETE' });
+                        
+                        // Send clear signal to all users
+                        await fetch(clearRef, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ timestamp: Date.now() })
+                        });
+                        
+                        window.lastClearTime = Date.now();
+                        lastLineId = 0;
+                        status.textContent = '🟢 Cleared for All';
+                        setTimeout(() => status.textContent = '🟢 Live', 1500);
+                    } catch (error) {
+                        console.error('Clear error:', error);
+                        status.textContent = '⚠️ Clear Failed';
+                        status.classList.add('error');
+                    }
                 }
             }
         });
@@ -615,6 +648,7 @@
         updateTransform();
         updateUndoRedoButtons();
         initFirebase();
+        startBatchSync();
     </script>
 </body>
 </html>
