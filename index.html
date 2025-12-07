@@ -13,6 +13,7 @@
             background: #f0f0f0;
             touch-action: none;
         }
+
         #toolbar {
             position: fixed;
             top: 0; left: 0; right: 0;
@@ -25,6 +26,7 @@
             align-items: center;
             flex-wrap: wrap;
         }
+
         .tool-section { display: flex; gap: 5px; align-items: center; }
 
         .color-palette {
@@ -32,6 +34,7 @@
             grid-template-columns: repeat(8, 1fr);
             gap: 4px;
         }
+
         .color-btn {
             width: 30px; height: 30px;
             border: 2px solid #ddd;
@@ -60,7 +63,9 @@
         }
 
         .size-control { display: flex; align-items: center; gap: 8px; }
-        #sizeSlider { width: 80px; }
+
+        #sizeSlider { width: 80px; transition: width 0.3s ease; }
+        #sizeSlider.admin-mode { width: 160px; }
 
         #canvasContainer {
             position: absolute;
@@ -76,6 +81,9 @@
             transform-origin: 0 0;
         }
 
+        #canvas.pan-mode { cursor: grab; }
+        #canvas.pan-mode:active { cursor: grabbing; }
+
         #zoomInfo {
             position: fixed;
             bottom: 10px; right: 10px;
@@ -86,27 +94,6 @@
             z-index: 1000;
         }
 
-        .cursor {
-            position: absolute;
-            width: 12px; height: 12px;
-            border-radius: 50%;
-            border: 2px solid #333;
-            pointer-events: none;
-            transform: translate(-50%, -50%);
-            z-index: 999;
-        }
-
-        .cursor-label {
-            position: absolute;
-            top: -25px; left: 15px;
-            background: rgba(0,0,0,0.7);
-            color: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 10px;
-            white-space: nowrap;
-        }
-
         .status {
             margin-left: auto;
             padding: 5px 10px;
@@ -114,6 +101,10 @@
             border-radius: 5px;
             font-size: 12px;
             color: #2e7d32;
+        }
+        .status.admin {
+            background: #fff3cd;
+            color: #8a6d3b;
         }
         .status.error {
             background: #ffebee;
@@ -153,84 +144,74 @@
 
 <script type="module">
 
-/* ========= FIXED FIREBASE URL — REQUIRED ========= */
+/* ========= FIREBASE ========= */
 const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com/";
+const linesRef = FIREBASE_DB_URL + "lines.json";
+const clearRef = FIREBASE_DB_URL + "clearSignal.json";
 
-/* ========= DOM ELEMENTS ========= */
+/* ========= DOM ========= */
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
-
 const colorPalette = document.getElementById("colorPalette");
 const sizeSlider = document.getElementById("sizeSlider");
 const sizeValue = document.getElementById("sizeValue");
-
-const undoBtn = document.getElementById("undoBtn");
-const redoBtn = document.getElementById("redoBtn");
 const drawBtn = document.getElementById("drawBtn");
 const panBtn = document.getElementById("panBtn");
+const undoBtn = document.getElementById("undoBtn");
 const clearBtn = document.getElementById("clearBtn");
 const status = document.getElementById("status");
 const zoomInfo = document.getElementById("zoomInfo");
 
-/* ========= PALETTE ========= */
+/* ========= COLORS ========= */
 const colors = [
-    "#FF0000", "#00FF00", "#0000FF", "#FFFF00",
-    "#FF00FF", "#00FFFF", "#FFA500", "#800080",
-    "#FFC0CB", "#A52A2A", "#808080", "#000000",
-    "#FFFFFF", "#008000", "#000080", "#800000"
+    "#FF0000","#00FF00","#0000FF","#FFFF00",
+    "#FF00FF","#00FFFF","#FFA500","#800080",
+    "#FFC0CB","#A52A2A","#808080","#000000",
+    "#FFFFFF","#008000","#000080","#800000"
 ];
 
 let currentColor = "#000000";
 let brushSize = 2;
 
-/* ========= INPUT STATE ========= */
+/* ========= STATE ========= */
 let isDrawing = false;
 let isPanning = false;
 let currentTool = "draw";
-let lastX = 0;
-let lastY = 0;
 
-/* ========= TRANSFORM / ZOOM ========= */
+let lastX = 0, lastY = 0;
+
+/* Zoom + pan */
 let scale = 1;
 let translateX = 0;
 let translateY = 0;
 
-/* ========= REALTIME / NETWORK ========= */
+let panStartX = 0;
+let panStartY = 0;
+let panOriginX = 0;
+let panOriginY = 0;
+
+/* Realtime */
 let isConnected = false;
 let lineBuffer = [];
-
-let lastLineId = 0;
-let listenInterval = null;
-let syncInterval = null;
-
-let sessionId = Date.now() + "-" + Math.random().toString(36).substr(2, 9);
-
-/* ========= TRACK DRAWN LINES ========= */
 let allDrawnLines = new Set();
 
-/* ========= UNDO / REDO LOCAL ========= */
-let myUndoStack = [];
-let myRedoStack = [];
-let myStrokes = [];
+/* Admin mode */
+let isAdmin = false;
 
-/* ========= REFS ========= */
-const linesRef = FIREBASE_DB_URL + "lines.json";
-const clearRef = FIREBASE_DB_URL + "clearSignal.json";
-
-/* ========= CREATE COLOR BUTTONS ========= */
-colors.forEach(color => {
+/* ========= COLOR BUTTONS ========= */
+colors.forEach(c=>{
     const btn = document.createElement("div");
-    btn.className = "color-btn";
-    btn.style.backgroundColor = color;
+    btn.className="color-btn";
+    btn.style.background=c;
 
-    if (color === "#FFFFFF") btn.style.border = "2px solid #333";
-    if (color === currentColor) btn.classList.add("active");
+    if (c===currentColor) btn.classList.add("active");
 
-    btn.addEventListener("click", () => {
-        currentColor = color;
-        document.querySelectorAll(".color-btn").forEach(b => b.classList.remove("active"));
+    btn.onclick=()=>{
+        currentColor=c;
+        document.querySelectorAll(".color-btn")
+            .forEach(b=>b.classList.remove("active"));
         btn.classList.add("active");
-    });
+    };
 
     colorPalette.appendChild(btn);
 });
@@ -240,254 +221,204 @@ drawBtn.onclick = () => {
     currentTool = "draw";
     drawBtn.classList.add("active");
     panBtn.classList.remove("active");
+    canvas.classList.remove("pan-mode");
 };
 
 panBtn.onclick = () => {
     currentTool = "pan";
     panBtn.classList.add("active");
     drawBtn.classList.remove("active");
+    canvas.classList.add("pan-mode");
 };
 
+/* ========= ADMIN CHECK ========= */
+fetch("https://api.ipify.org?format=json")
+    .then(r=>r.json())
+    .then(ip=>{
+        if (ip.ip === "69.170.112.226") {
+            isAdmin = true;
+            sizeSlider.classList.add("admin-mode");
+            sizeSlider.max = 1000;
+            status.classList.add("admin");
+            status.textContent = "🛠 Admin Mode";
+        }
+    });
+
 /* ========= BRUSH SIZE ========= */
-sizeSlider.oninput = e => {
+sizeSlider.oninput=e=>{
     brushSize = parseInt(e.target.value);
     sizeValue.textContent = brushSize;
 };
 
 /* ========= TRANSFORM ========= */
-function updateTransform() {
-    canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-    zoomInfo.textContent = `Zoom: ${Math.round(scale * 100)}%`;
+function applyTransform() {
+    canvas.style.transform =
+        `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    zoomInfo.textContent = `Zoom: ${Math.round(scale*100)}%`;
 }
 
-function getCanvasCoords(clientX, clientY) {
+function getCanvasCoords(x, y) {
     const rect = canvas.getBoundingClientRect();
     return {
-        x: (clientX - rect.left) / scale,
-        y: (clientY - rect.top) / scale
+        x: (x - rect.left) / scale,
+        y: (y - rect.top) / scale
     };
 }
 
 /* ========= DRAWING ========= */
-function drawLine(x1, y1, x2, y2, color, size) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = size;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+function drawLine(x1,y1,x2,y2,color,size){
+    ctx.strokeStyle=color;
+    ctx.lineWidth=size;
+    ctx.lineCap="round";
+    ctx.lineJoin="round";
     ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
+    ctx.moveTo(x1,y1);
+    ctx.lineTo(x2,y2);
     ctx.stroke();
 }
 
-function startDrawing(e) {
-    if (currentTool !== "draw") return;
-
-    isDrawing = true;
-    const coords = getCanvasCoords(e.clientX, e.clientY);
-    lastX = coords.x;
-    lastY = coords.y;
-    myStrokes = [];
-}
-
-function drawMove(e) {
-    if (!isDrawing || currentTool !== "draw") return;
-
-    const coords = getCanvasCoords(e.clientX, e.clientY);
-
-    drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
-
-    const line = {
-        x1: lastX,
-        y1: lastY,
-        x2: coords.x,
-        y2: coords.y,
-        color: currentColor,
-        size: brushSize,
-        timestamp: Date.now()
-    };
-
-    lineBuffer.push(line);
-    myStrokes.push(line);
-
-    lastX = coords.x;
-    lastY = coords.y;
-}
-
-function stopDrawing() {
-    if (isDrawing && myStrokes.length > 0) {
-        myUndoStack.push([...myStrokes]);
-        myRedoStack = [];
-        updateUndoRedoButtons();
+canvas.addEventListener("mousedown", e=>{
+    if (currentTool==="draw") {
+        isDrawing = true;
+        const c = getCanvasCoords(e.clientX, e.clientY);
+        lastX=c.x; lastY=c.y;
     }
-    isDrawing = false;
-}
-
-/* ========= UNDO/REDO ========= */
-function updateUndoRedoButtons() {
-    undoBtn.disabled = myUndoStack.length === 0;
-    redoBtn.disabled = myRedoStack.length === 0;
-}
-
-undoBtn.onclick = () => {
-    if (!myUndoStack.length) return;
-
-    myUndoStack.pop();
-    myRedoStack.push([]);
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    allDrawnLines.clear();
-
-    loadAllFromFirebase();
-};
-
-redoBtn.onclick = () => {};
-
-/* ========= CLEAR ========= */
-clearBtn.onclick = async () => {
-    if (!confirm("Clear the canvas for everyone? This cannot be undone!")) return;
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    allDrawnLines.clear();
-    myUndoStack = [];
-    myRedoStack = [];
-
-    updateUndoRedoButtons();
-
-    await fetch(linesRef, { method: "DELETE" });
-
-    await fetch(clearRef, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timestamp: Date.now() })
-    });
-};
-
-/* ========= LOAD ALL LINES ========= */
-async function loadAllFromFirebase() {
-    try {
-        const response = await fetch(linesRef);
-        const data = await response.json();
-        if (!data) return;
-
-        const lines = Object.entries(data).map(([id, line]) => ({
-            ...line,
-            id
-        }));
-
-        lines.sort((a, b) => a.timestamp - b.timestamp);
-
-        for (let line of lines) {
-            if (!allDrawnLines.has(line.id)) {
-                drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                allDrawnLines.add(line.id);
-            }
-        }
-    } catch (err) {
-        console.error("Load error", err);
+    else if (currentTool==="pan") {
+        isPanning = true;
+        panStartX = e.clientX;
+        panStartY = e.clientY;
+        panOriginX = translateX;
+        panOriginY = translateY;
     }
-}
+});
 
-/* ========= BATCH SYNC ========= */
-function startBatchSync() {
-    syncInterval = setInterval(async () => {
-        if (!lineBuffer.length) return;
-
-        const batch = [...lineBuffer];
-        lineBuffer = [];
-
-        const updates = {};
-
-        batch.forEach(line => {
-            const id = `${lastLineId++}-${sessionId}`;
-            updates[id] = line;
-            allDrawnLines.add(id);
+canvas.addEventListener("mousemove", e=>{
+    if (isDrawing && currentTool==="draw") {
+        const c = getCanvasCoords(e.clientX, e.clientY);
+        drawLine(lastX,lastY,c.x,c.y,currentColor,brushSize);
+        lineBuffer.push({
+            x1:lastX, y1:lastY,
+            x2:c.x,  y2:c.y,
+            color:currentColor,
+            size:brushSize,
+            timestamp:Date.now()
         });
-
-        await fetch(linesRef, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(updates)
-        });
-
-        status.textContent = "🟢 Live";
-    }, 100);
-}
-
-/* ========= REALTIME LISTENER ========= */
-function startRealtimeListener() {
-    listenInterval = setInterval(async () => {
-        try {
-            const response = await fetch(linesRef);
-            const data = await response.json();
-
-            if (data) {
-                for (const [id, line] of Object.entries(data)) {
-                    if (!allDrawnLines.has(id)) {
-                        drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
-                        allDrawnLines.add(id);
-                    }
-                }
-            }
-
-            const clearRes = await fetch(clearRef);
-            const clearData = await clearRes.json();
-
-            if (clearData && clearData.timestamp > (window.lastClear || 0)) {
-                window.lastClear = clearData.timestamp;
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                allDrawnLines.clear();
-            }
-        } catch (err) {}
-    }, 300);
-}
-
-/* ========= INIT ========= */
-async function initFirebase() {
-    try {
-        const test = await fetch(linesRef);
-        if (test.ok) {
-            isConnected = true;
-            status.textContent = "🟢 Connected";
-
-            await loadAllFromFirebase();
-            startRealtimeListener();
-            startBatchSync();
-        }
-    } catch (err) {
-        status.textContent = "⚠️ Connection Error";
+        lastX=c.x; lastY=c.y;
     }
-}
+    else if (isPanning && currentTool==="pan") {
+        translateX = panOriginX + (e.clientX - panStartX);
+        translateY = panOriginY + (e.clientY - panStartY);
+        applyTransform();
+    }
+});
 
-/* ========= MOUSE EVENTS ========= */
-canvas.addEventListener("mousedown", startDrawing);
-canvas.addEventListener("mousemove", drawMove);
-canvas.addEventListener("mouseup", stopDrawing);
-canvas.addEventListener("mouseleave", stopDrawing);
+canvas.addEventListener("mouseup", ()=>{ isDrawing=false; isPanning=false; });
+canvas.addEventListener("mouseleave", ()=>{ isDrawing=false; isPanning=false; });
 
 /* ========= ZOOM ========= */
-canvas.addEventListener("wheel", e => {
+canvas.addEventListener("wheel", e=>{
     e.preventDefault();
 
     const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
 
-    const oldScale = scale;
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-
+    const prevScale = scale;
+    const delta = e.deltaY>0 ? 0.9 : 1.1;
     scale = Math.min(Math.max(scale * delta, 0.2), 10);
-    const scaleFactor = scale / oldScale;
+    const factor = scale / prevScale;
 
-    translateX = mouseX - (mouseX - translateX) * scaleFactor;
-    translateY = mouseY - (mouseY - translateY) * scaleFactor;
+    translateX = mx - (mx - translateX) * factor;
+    translateY = my - (my - translateY) * factor;
 
-    updateTransform();
+    applyTransform();
 });
 
-/* ========= START ========= */
-initFirebase();
-updateUndoRedoButtons();
+/* ========= CLEAR ========= */
+clearBtn.onclick=async()=>{
+    if (!confirm("Clear canvas for everyone?")) return;
+
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    allDrawnLines.clear();
+
+    await fetch(linesRef,{method:"DELETE"});
+
+    await fetch(clearRef,{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({timestamp:Date.now()})
+    });
+};
+
+/* ========= LOAD EXISTING LINES ========= */
+async function loadAll() {
+    try {
+        const res = await fetch(linesRef);
+        const data = await res.json();
+        if (!data) return;
+
+        const lines = Object.entries(data)
+            .map(([id,l])=>({...l,id}))
+            .sort((a,b)=>a.timestamp-b.timestamp);
+
+        lines.forEach(line=>{
+            if (!allDrawnLines.has(line.id)){
+                drawLine(line.x1,line.y1,line.x2,line.y2,line.color,line.size);
+                allDrawnLines.add(line.id);
+            }
+        });
+    } catch(err){}
+}
+
+/* ========= SYNC ========= */
+setInterval(async()=>{
+    if (!lineBuffer.length) return;
+
+    const batch = [...lineBuffer];
+    lineBuffer = [];
+
+    const updates = {};
+    batch.forEach(l=>{
+        const id = "L"+Math.random().toString(36).slice(2);
+        updates[id]=l;
+        allDrawnLines.add(id);
+    });
+
+    await fetch(linesRef,{
+        method:"PATCH",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(updates)
+    });
+
+    status.textContent="🟢 Live";
+},120);
+
+setInterval(async()=>{
+    try {
+        const r = await fetch(linesRef);
+        const d = await r.json();
+        if (d) {
+            for (const [id,l] of Object.entries(d)) {
+                if (!allDrawnLines.has(id)) {
+                    drawLine(l.x1,l.y1,l.x2,l.y2,l.color,l.size);
+                    allDrawnLines.add(id);
+                }
+            }
+        }
+
+        const clrR = await fetch(clearRef);
+        const clr = await clrR.json();
+        if (clr && clr.timestamp>(window.lastClear||0)) {
+            window.lastClear = clr.timestamp;
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            allDrawnLines.clear();
+        }
+    } catch(err){}
+},300);
+
+/* INIT */
+loadAll();
+applyTransform();
 
 </script>
 </body>
