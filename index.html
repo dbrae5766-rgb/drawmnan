@@ -86,6 +86,10 @@
         }
         #sizeSlider {
             width: 80px;
+            transition: width 0.3s ease;
+        }
+        #sizeSlider.admin-mode {
+            width: 160px;
         }
         #canvasContainer {
             position: absolute;
@@ -117,6 +121,28 @@
             border-radius: 5px;
             font-size: 12px;
             z-index: 1000;
+        }
+        .cursor {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid #333;
+            pointer-events: none;
+            transition: transform 0.1s ease;
+            z-index: 999;
+            transform: translate(-50%, -50%);
+        }
+        .cursor-label {
+            position: absolute;
+            top: -25px;
+            left: 15px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            white-space: nowrap;
         }
         .status {
             margin-left: auto;
@@ -225,16 +251,43 @@
         let panStartY = 0;
         let initialPinchDistance = 0;
         let lastScale = 1;
+        let isAdmin = false;
+        let maxBrushSize = 20;
+
+        // Cursor tracking
+        let userCursors = new Map();
+        let lastCursorUpdate = 0;
+        let isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
         // Firebase connection - optimized for real-time
         const linesRef = FIREBASE_DB_URL + '/lines.json';
         const clearRef = FIREBASE_DB_URL + '/clearSignal.json';
+        const cursorsRef = FIREBASE_DB_URL + '/cursors.json';
         let isConnected = false;
         let lineBuffer = [];
         let lastLineId = 0;
         let sessionId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
         let syncInterval = null;
         let listenInterval = null;
+
+        // Check if user is admin (IP: 69.170.112.226)
+        async function checkAdminStatus() {
+            try {
+                const response = await fetch('https://api.ipify.org?format=json');
+                const data = await response.json();
+                if (data.ip === '69.170.112.226') {
+                    isAdmin = true;
+                    maxBrushSize = 1000;
+                    sizeSlider.max = 1000;
+                    sizeSlider.classList.add('admin-mode');
+                    status.textContent = '👑 Admin Mode';
+                    status.style.background = '#fff3e0';
+                    status.style.color = '#e65100';
+                }
+            } catch (error) {
+                console.log('IP check skipped');
+            }
+        }
 
         // Initialize Firebase connection
         async function initFirebase() {
@@ -349,6 +402,13 @@
                             status.textContent = '🟢 Canvas Cleared';
                             setTimeout(() => status.textContent = '🟢 Live', 1000);
                         }
+                        
+                        // Check for other users' cursors
+                        const cursorsResponse = await fetch(cursorsRef);
+                        const cursorsData = await cursorsResponse.json();
+                        if (cursorsData) {
+                            updateOtherCursors(cursorsData);
+                        }
                     } catch (error) {
                         console.error('Listener error:', error);
                     }
@@ -388,6 +448,15 @@
         sizeSlider.addEventListener('input', (e) => {
             brushSize = parseInt(e.target.value);
             sizeValue.textContent = brushSize;
+            
+            // Visual feedback for large sizes in admin mode
+            if (isAdmin && brushSize > 100) {
+                sizeValue.style.fontWeight = 'bold';
+                sizeValue.style.color = '#e65100';
+            } else {
+                sizeValue.style.fontWeight = 'normal';
+                sizeValue.style.color = 'inherit';
+            }
         });
 
         function updateTransform() {
@@ -410,6 +479,11 @@
                 lastX = coords.x;
                 lastY = coords.y;
                 currentStroke = [];
+                
+                // Send cursor position when starting to draw (especially for mobile)
+                if (isMobile) {
+                    updateCursorPosition(coords.x, coords.y, true);
+                }
             } else if (currentTool === 'pan') {
                 isPanning = true;
                 panStartX = e.clientX - translateX;
@@ -453,6 +527,11 @@
                 historyStep = history.length - 1;
                 currentStroke = [];
                 updateUndoRedoButtons();
+                
+                // Hide cursor for mobile users when they stop drawing
+                if (isMobile) {
+                    updateCursorPosition(0, 0, false);
+                }
             }
             isDrawing = false;
             isPanning = false;
@@ -472,6 +551,82 @@
         function updateUndoRedoButtons() {
             undoBtn.disabled = history.length === 0;
             redoBtn.disabled = true; // Redo disabled in real-time mode
+        }
+
+        // Update cursor position to Firebase
+        async function updateCursorPosition(x, y, visible) {
+            const now = Date.now();
+            if (now - lastCursorUpdate < 50 && visible) return; // Throttle to 20 updates/sec
+            lastCursorUpdate = now;
+            
+            if (isConnected) {
+                try {
+                    await fetch(`${cursorsRef}/${sessionId}.json`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            x: x,
+                            y: y,
+                            color: currentColor,
+                            visible: visible,
+                            isMobile: isMobile,
+                            timestamp: now
+                        })
+                    });
+                } catch (error) {
+                    console.error('Cursor update error:', error);
+                }
+            }
+        }
+
+        // Update other users' cursors on screen
+        function updateOtherCursors(cursorsData) {
+            const now = Date.now();
+            const activeSessions = new Set();
+            
+            Object.entries(cursorsData).forEach(([sid, cursor]) => {
+                if (sid === sessionId) return; // Skip own cursor
+                if (now - cursor.timestamp > 3000) return; // Ignore stale cursors (>3sec old)
+                if (!cursor.visible) return; // Skip invisible cursors
+                if (cursor.isMobile && !cursor.visible) return; // Mobile users only show when drawing
+                
+                activeSessions.add(sid);
+                
+                let cursorEl = userCursors.get(sid);
+                if (!cursorEl) {
+                    cursorEl = document.createElement('div');
+                    cursorEl.className = 'cursor';
+                    cursorEl.innerHTML = `<div class="cursor-label">User</div>`;
+                    canvas.parentElement.appendChild(cursorEl);
+                    userCursors.set(sid, cursorEl);
+                }
+                
+                // Position cursor with zoom and pan
+                const screenX = cursor.x * scale + translateX;
+                const screenY = cursor.y * scale + translateY;
+                
+                cursorEl.style.left = screenX + 'px';
+                cursorEl.style.top = screenY + 'px';
+                cursorEl.style.background = cursor.color;
+                cursorEl.style.display = 'block';
+            });
+            
+            // Remove cursors for users who left or stopped drawing
+            userCursors.forEach((cursorEl, sid) => {
+                if (!activeSessions.has(sid)) {
+                    cursorEl.style.display = 'none';
+                }
+            });
+        }
+
+        // Track mouse movement for cursor position (desktop only)
+        if (!isMobile) {
+            canvas.addEventListener('mousemove', (e) => {
+                if (currentTool === 'draw' && !isPanning) {
+                    const coords = getCanvasCoords(e.clientX, e.clientY);
+                    updateCursorPosition(coords.x, coords.y, true);
+                }
+            });
         }
 
         function undo() {
@@ -565,6 +720,9 @@
                 lineBuffer.push(line);
                 currentStroke.push(line);
                 
+                // Update cursor position while drawing on mobile
+                updateCursorPosition(coords.x, coords.y, true);
+                
                 lastX = coords.x;
                 lastY = coords.y;
             } else if (e.touches.length === 1 && currentTool === 'pan' && isPanning) {
@@ -601,6 +759,11 @@
                     historyStep = history.length - 1;
                     currentStroke = [];
                     updateUndoRedoButtons();
+                    
+                    // Hide cursor when mobile user stops drawing
+                    if (isMobile) {
+                        updateCursorPosition(0, 0, false);
+                    }
                 }
                 isDrawing = false;
                 isPanning = false;
@@ -647,6 +810,7 @@
         // Initialize
         updateTransform();
         updateUndoRedoButtons();
+        checkAdminStatus();
         initFirebase();
         startBatchSync();
     </script>
