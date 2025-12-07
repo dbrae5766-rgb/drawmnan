@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Drawing Canvas</title>
+    <title>Collaborative Drawing Canvas</title>
     <style>
         * {
             margin: 0;
@@ -69,11 +69,15 @@
             color: white;
             border-color: #4CAF50;
         }
-        .tool-btn:hover {
+        .tool-btn:hover:not(:disabled) {
             background: #f0f0f0;
         }
         .tool-btn.active:hover {
             background: #45a049;
+        }
+        .tool-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         .size-control {
             display: flex;
@@ -113,6 +117,18 @@
             border-radius: 5px;
             font-size: 12px;
             z-index: 1000;
+        }
+        .status {
+            margin-left: auto;
+            padding: 5px 10px;
+            background: #e8f5e9;
+            border-radius: 5px;
+            font-size: 12px;
+            color: #2e7d32;
+        }
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
         }
 
         @media (max-width: 768px) {
@@ -161,16 +177,33 @@
         <button id="undoBtn" class="tool-btn">↶ Undo</button>
         <button id="redoBtn" class="tool-btn">↷ Redo</button>
         <button id="clearBtn" class="tool-btn">🗑️ Clear</button>
+        <div class="status" id="status">Connecting...</div>
     </div>
     <div id="canvasContainer">
         <canvas id="canvas" width="3000" height="2000"></canvas>
     </div>
     <div id="zoomInfo">Zoom: 100%</div>
 
-    <script>
+    <script type="module">
+        // ============================================
+        // FIREBASE CONFIGURATION - REPLACE THIS URL
+        // ============================================
+        // Step 1: Go to https://console.firebase.google.com
+        // Step 2: Create a new project (or use existing)
+        // Step 3: Click "Realtime Database" in left menu
+        // Step 4: Click "Create Database"
+        // Step 5: Choose location and "Start in test mode"
+        // Step 6: Copy your database URL (looks like: https://YOUR-PROJECT-NAME.firebaseio.com)
+        // Step 7: Paste it below, replacing the placeholder
+        
+        const FIREBASE_DB_URL = 'https://drawing-ce2f6-default-rtdb.firebaseio.com';
+        
+        // ============================================
+        // DON'T EDIT BELOW THIS LINE
+        // ============================================
+
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const container = document.getElementById('canvasContainer');
         const colorPalette = document.getElementById('colorPalette');
         const sizeSlider = document.getElementById('sizeSlider');
         const sizeValue = document.getElementById('sizeValue');
@@ -180,6 +213,7 @@
         const drawBtn = document.getElementById('drawBtn');
         const panBtn = document.getElementById('panBtn');
         const zoomInfo = document.getElementById('zoomInfo');
+        const status = document.getElementById('status');
 
         const colors = [
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00',
@@ -195,13 +229,10 @@
         let currentTool = 'draw';
         let lastX = 0;
         let lastY = 0;
-
-        // History for undo/redo
         let history = [];
         let historyStep = -1;
         let currentStroke = [];
 
-        // Pan and zoom variables
         let scale = 1;
         let translateX = 0;
         let translateY = 0;
@@ -210,17 +241,106 @@
         let initialPinchDistance = 0;
         let lastScale = 1;
 
-        // Create color buttons
+        // Firebase connection
+        const dbRef = FIREBASE_DB_URL + '/strokes.json';
+        let isConnected = false;
+        let lastStrokeCount = 0;
+
+        // Initialize Firebase connection
+        async function initFirebase() {
+            if (FIREBASE_DB_URL === 'https://YOUR-PROJECT-NAME.firebaseio.com') {
+                status.textContent = '⚠️ Configure Firebase';
+                status.classList.add('error');
+                console.error('Please configure your Firebase URL in the code!');
+                return;
+            }
+
+            try {
+                const response = await fetch(dbRef);
+                if (response.ok) {
+                    isConnected = true;
+                    status.textContent = '🟢 Connected';
+                    status.classList.remove('error');
+                    loadFromFirebase();
+                    startFirebaseListener();
+                } else {
+                    status.textContent = '⚠️ Connection Failed';
+                    status.classList.add('error');
+                }
+            } catch (error) {
+                console.error('Firebase init error:', error);
+                status.textContent = '⚠️ Connection Error';
+                status.classList.add('error');
+            }
+        }
+
+        async function loadFromFirebase() {
+            if (!isConnected) return;
+            try {
+                const response = await fetch(dbRef);
+                const data = await response.json();
+                if (data) {
+                    const strokes = Object.values(data);
+                    history = strokes;
+                    historyStep = history.length - 1;
+                    lastStrokeCount = history.length;
+                    redrawCanvas();
+                    updateUndoRedoButtons();
+                }
+            } catch (error) {
+                console.error('Load error:', error);
+            }
+        }
+
+        async function saveStrokeToFirebase(stroke) {
+            if (!isConnected) return;
+            try {
+                await fetch(dbRef, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(stroke)
+                });
+                status.textContent = '🟢 Synced';
+                status.classList.remove('error');
+            } catch (error) {
+                console.error('Save error:', error);
+                status.textContent = '⚠️ Sync Failed';
+                status.classList.add('error');
+            }
+        }
+
+        function startFirebaseListener() {
+            // Poll for updates every 2 seconds
+            setInterval(async () => {
+                if (!isDrawing && isConnected) {
+                    try {
+                        const response = await fetch(dbRef);
+                        const data = await response.json();
+                        if (data) {
+                            const strokes = Object.values(data);
+                            if (strokes.length > lastStrokeCount) {
+                                // New strokes added by other users
+                                lastStrokeCount = strokes.length;
+                                history = strokes;
+                                historyStep = history.length - 1;
+                                redrawCanvas();
+                                updateUndoRedoButtons();
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Listener error:', error);
+                    }
+                }
+            }, 2000);
+        }
+
+        // Color buttons
         colors.forEach(color => {
             const btn = document.createElement('div');
             btn.className = 'color-btn';
             btn.style.backgroundColor = color;
-            if (color === '#FFFFFF') {
-                btn.style.border = '2px solid #333';
-            }
-            if (color === currentColor) {
-                btn.classList.add('active');
-            }
+            if (color === '#FFFFFF') btn.style.border = '2px solid #333';
+            if (color === currentColor) btn.classList.add('active');
             btn.addEventListener('click', () => {
                 currentColor = color;
                 document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('active'));
@@ -244,27 +364,24 @@
             canvas.classList.add('pan-mode');
         });
 
-        // Size slider
         sizeSlider.addEventListener('input', (e) => {
             brushSize = parseInt(e.target.value);
             sizeValue.textContent = brushSize;
         });
 
-        // Update canvas transform
         function updateTransform() {
             canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
             zoomInfo.textContent = `Zoom: ${Math.round(scale * 100)}%`;
         }
 
-        // Get canvas coordinates
         function getCanvasCoords(clientX, clientY) {
             const rect = canvas.getBoundingClientRect();
-            const x = (clientX - rect.left) / scale;
-            const y = (clientY - rect.top) / scale;
-            return { x, y };
+            return {
+                x: (clientX - rect.left) / scale,
+                y: (clientY - rect.top) / scale
+            };
         }
 
-        // Drawing functions
         function startDrawing(e) {
             if (currentTool === 'draw') {
                 isDrawing = true;
@@ -272,12 +389,9 @@
                 lastX = coords.x;
                 lastY = coords.y;
                 currentStroke = [{
-                    x1: coords.x,
-                    y1: coords.y,
-                    x2: coords.x,
-                    y2: coords.y,
-                    color: currentColor,
-                    size: brushSize
+                    x1: coords.x, y1: coords.y,
+                    x2: coords.x, y2: coords.y,
+                    color: currentColor, size: brushSize
                 }];
             } else if (currentTool === 'pan') {
                 isPanning = true;
@@ -291,12 +405,9 @@
                 const coords = getCanvasCoords(e.clientX, e.clientY);
                 drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
                 currentStroke.push({
-                    x1: lastX,
-                    y1: lastY,
-                    x2: coords.x,
-                    y2: coords.y,
-                    color: currentColor,
-                    size: brushSize
+                    x1: lastX, y1: lastY,
+                    x2: coords.x, y2: coords.y,
+                    color: currentColor, size: brushSize
                 });
                 lastX = coords.x;
                 lastY = coords.y;
@@ -309,10 +420,11 @@
 
         function stopDrawing() {
             if (isDrawing && currentStroke.length > 0) {
-                // Add stroke to history
                 historyStep++;
                 history = history.slice(0, historyStep);
                 history.push([...currentStroke]);
+                lastStrokeCount = history.length;
+                saveStrokeToFirebase(currentStroke);
                 currentStroke = [];
                 updateUndoRedoButtons();
             }
@@ -331,7 +443,6 @@
             ctx.stroke();
         }
 
-        // Redraw canvas from history
         function redrawCanvas() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             for (let i = 0; i <= historyStep; i++) {
@@ -342,17 +453,11 @@
             }
         }
 
-        // Update undo/redo button states
         function updateUndoRedoButtons() {
             undoBtn.disabled = historyStep < 0;
             redoBtn.disabled = historyStep >= history.length - 1;
-            undoBtn.style.opacity = undoBtn.disabled ? '0.5' : '1';
-            redoBtn.style.opacity = redoBtn.disabled ? '0.5' : '1';
-            undoBtn.style.cursor = undoBtn.disabled ? 'not-allowed' : 'pointer';
-            redoBtn.style.cursor = redoBtn.disabled ? 'not-allowed' : 'pointer';
         }
 
-        // Undo function
         function undo() {
             if (historyStep >= 0) {
                 historyStep--;
@@ -361,7 +466,6 @@
             }
         }
 
-        // Redo function
         function redo() {
             if (historyStep < history.length - 1) {
                 historyStep++;
@@ -370,13 +474,9 @@
             }
         }
 
-        // Undo button
         undoBtn.addEventListener('click', undo);
-
-        // Redo button
         redoBtn.addEventListener('click', redo);
 
-        // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
                 e.preventDefault();
@@ -387,28 +487,24 @@
             }
         });
 
-        // Zoom with mouse wheel
+        // Zoom
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const rect = canvas.getBoundingClientRect();
             const mouseX = e.clientX - rect.left;
             const mouseY = e.clientY - rect.top;
-
             const delta = e.deltaY > 0 ? 0.9 : 1.1;
             const newScale = Math.min(Math.max(0.1, scale * delta), 10);
-
             const scaleChange = newScale / scale;
             translateX = mouseX - (mouseX - translateX) * scaleChange;
             translateY = mouseY - (mouseY - translateY) * scaleChange;
-            
             scale = newScale;
             updateTransform();
         }, { passive: false });
 
-        // Touch events for mobile
+        // Touch events
         canvas.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            
             if (e.touches.length === 1 && currentTool === 'draw') {
                 const touch = e.touches[0];
                 const coords = getCanvasCoords(touch.clientX, touch.clientY);
@@ -416,12 +512,9 @@
                 lastX = coords.x;
                 lastY = coords.y;
                 currentStroke = [{
-                    x1: coords.x,
-                    y1: coords.y,
-                    x2: coords.x,
-                    y2: coords.y,
-                    color: currentColor,
-                    size: brushSize
+                    x1: coords.x, y1: coords.y,
+                    x2: coords.x, y2: coords.y,
+                    color: currentColor, size: brushSize
                 }];
             } else if (e.touches.length === 1 && currentTool === 'pan') {
                 const touch = e.touches[0];
@@ -443,18 +536,14 @@
 
         canvas.addEventListener('touchmove', (e) => {
             e.preventDefault();
-            
             if (e.touches.length === 1 && currentTool === 'draw' && isDrawing) {
                 const touch = e.touches[0];
                 const coords = getCanvasCoords(touch.clientX, touch.clientY);
                 drawLine(lastX, lastY, coords.x, coords.y, currentColor, brushSize);
                 currentStroke.push({
-                    x1: lastX,
-                    y1: lastY,
-                    x2: coords.x,
-                    y2: coords.y,
-                    color: currentColor,
-                    size: brushSize
+                    x1: lastX, y1: lastY,
+                    x2: coords.x, y2: coords.y,
+                    color: currentColor, size: brushSize
                 });
                 lastX = coords.x;
                 lastY = coords.y;
@@ -470,20 +559,15 @@
                     touch2.clientX - touch1.clientX,
                     touch2.clientY - touch1.clientY
                 );
-                
                 const centerX = (touch1.clientX + touch2.clientX) / 2;
                 const centerY = (touch1.clientY + touch2.clientY) / 2;
-                
                 const rect = canvas.getBoundingClientRect();
                 const pointX = centerX - rect.left;
                 const pointY = centerY - rect.top;
-
                 const newScale = Math.min(Math.max(0.1, lastScale * (currentDistance / initialPinchDistance)), 10);
                 const scaleChange = newScale / scale;
-                
                 translateX = pointX - (pointX - translateX) * scaleChange;
                 translateY = pointY - (pointY - translateY) * scaleChange;
-                
                 scale = newScale;
                 updateTransform();
             }
@@ -496,6 +580,8 @@
                     historyStep++;
                     history = history.slice(0, historyStep);
                     history.push([...currentStroke]);
+                    lastStrokeCount = history.length;
+                    saveStrokeToFirebase(currentStroke);
                     currentStroke = [];
                     updateUndoRedoButtons();
                 }
@@ -510,19 +596,25 @@
         canvas.addEventListener('mouseup', stopDrawing);
         canvas.addEventListener('mouseout', stopDrawing);
 
-        // Clear canvas
-        clearBtn.addEventListener('click', () => {
-            if (confirm('Clear the canvas? This cannot be undone!')) {
+        clearBtn.addEventListener('click', async () => {
+            if (confirm('Clear the canvas for everyone? This cannot be undone!')) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 history = [];
                 historyStep = -1;
+                lastStrokeCount = 0;
                 updateUndoRedoButtons();
+                if (isConnected) {
+                    await fetch(FIREBASE_DB_URL + '/strokes.json', {
+                        method: 'DELETE'
+                    });
+                }
             }
         });
 
         // Initialize
         updateTransform();
         updateUndoRedoButtons();
+        initFirebase();
     </script>
 </body>
 </html>
