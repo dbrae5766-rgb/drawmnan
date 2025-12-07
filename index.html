@@ -1,424 +1,248 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Collaborative Drawing Canvas</title>
-
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: Arial, sans-serif;
-            overflow: hidden;
-            background: #f0f0f0;
-            touch-action: none;
-        }
-
-        #toolbar {
-            position: fixed;
-            top: 0; left: 0; right: 0;
-            background: white;
-            padding: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            z-index: 1000;
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .tool-section { display: flex; gap: 5px; align-items: center; }
-
-        .color-palette {
-            display: grid;
-            grid-template-columns: repeat(8, 1fr);
-            gap: 4px;
-        }
-
-        .color-btn {
-            width: 30px; height: 30px;
-            border: 2px solid #ddd;
-            cursor: pointer;
-            border-radius: 5px;
-            transition: transform 0.1s;
-        }
-        .color-btn:hover { transform: scale(1.1); }
-        .color-btn.active {
-            border: 3px solid #333;
-            box-shadow: 0 0 5px rgba(0,0,0,0.3);
-        }
-
-        .tool-btn {
-            padding: 8px 12px;
-            cursor: pointer;
-            border: 2px solid #ddd;
-            background: white;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        .tool-btn.active {
-            background: #4CAF50;
-            color: white;
-            border-color: #4CAF50;
-        }
-
-        .size-control { display: flex; align-items: center; gap: 8px; }
-
-        #sizeSlider { width: 80px; transition: width 0.3s ease; }
-        #sizeSlider.admin-mode { width: 160px; }
-
-        #canvasContainer {
-            position: absolute;
-            top: 60px; left: 0; right: 0; bottom: 0;
-            overflow: hidden;
-            background: #e0e0e0;
-        }
-
-        #canvas {
-            display: block;
-            background: white;
-            cursor: crosshair;
-            transform-origin: 0 0;
-        }
-
-        #canvas.pan-mode { cursor: grab; }
-        #canvas.pan-mode:active { cursor: grabbing; }
-
-        #zoomInfo {
-            position: fixed;
-            bottom: 10px; right: 10px;
-            background: rgba(255,255,255,0.9);
-            padding: 8px 12px;
-            border-radius: 5px;
-            font-size: 12px;
-            z-index: 1000;
-        }
-
-        .status {
-            margin-left: auto;
-            padding: 5px 10px;
-            background: #e8f5e9;
-            border-radius: 5px;
-            font-size: 12px;
-            color: #2e7d32;
-        }
-        .status.admin {
-            background: #fff3cd;
-            color: #8a6d3b;
-        }
-        .status.error {
-            background: #ffebee;
-            color: #c62828;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>r/Place 2022 Clone</title>
+<style>
+    html, body {margin:0;padding:0;overflow:hidden;font-family:Arial,sans-serif;}
+    #toolbar {position:fixed;top:0;left:0;right:0;background:white;padding:8px;box-shadow:0 2px 5px rgba(0,0,0,0.1);z-index:1000;display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+    .color-btn {width:25px;height:25px;border:1px solid #ccc;cursor:pointer;border-radius:3px;transition:transform 0.1s;}
+    .color-btn.active {border:2px solid #333;}
+    .tool-btn {padding:6px 10px;cursor:pointer;border:1px solid #ddd;border-radius:5px;font-size:14px;}
+    .tool-btn.active {background:#4CAF50;color:white;border-color:#4CAF50;}
+    #canvasContainer {position:absolute;top:50px;left:0;right:0;bottom:0;overflow:hidden;background:#eee;}
+    #canvas {background:white;cursor:crosshair;display:block;transform-origin:0 0;}
+    #zoomInfo {position:fixed;bottom:10px;right:10px;background:rgba(255,255,255,0.9);padding:6px 10px;border-radius:5px;font-size:12px;}
+    .status {margin-left:auto;padding:4px 8px;border-radius:4px;font-size:12px;background:#e8f5e9;color:#2e7d32;}
+    .status.error {background:#ffebee;color:#c62828;}
+    #cooldown {margin-left:10px;font-size:12px;}
+    .cursor {position:absolute;width:10px;height:10px;border-radius:50%;border:2px solid #333;pointer-events:none;z-index:999;transform:translate(-50%,-50%);}
+</style>
 </head>
-
 <body>
-
 <div id="toolbar">
     <div class="tool-section">
         <button id="drawBtn" class="tool-btn active">✏️ Draw</button>
         <button id="panBtn" class="tool-btn">👋 Pan</button>
     </div>
-
-    <div id="colorPalette" class="color-palette"></div>
-
-    <div class="size-control">
-        <label for="sizeSlider">Size:</label>
-        <input type="range" id="sizeSlider" min="1" max="20" value="2">
-        <span id="sizeValue">2</span>
-    </div>
-
-    <button id="undoBtn" class="tool-btn">↶ Undo</button>
-    <button id="redoBtn" class="tool-btn">↷ Redo</button>
-    <button id="clearBtn" class="tool-btn">🗑️ Clear</button>
-
-    <div id="status" class="status">Connecting...</div>
+    <div class="color-palette" id="colorPalette"></div>
+    <div class="status" id="status">Connecting...</div>
+    <div id="cooldown"></div>
 </div>
-
 <div id="canvasContainer">
-    <canvas id="canvas" width="3000" height="2000"></canvas>
+    <canvas id="canvas" width="5000" height="5000"></canvas>
 </div>
-
 <div id="zoomInfo">Zoom: 100%</div>
-
 <script type="module">
+const FIREBASE_DB_URL = 'https://drawing-ce2f6-default-rtdb.firebaseio.com';
 
-/* ========= FIREBASE ========= */
-const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com/";
-const linesRef = FIREBASE_DB_URL + "lines.json";
-const clearRef = FIREBASE_DB_URL + "clearSignal.json";
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const colorPalette = document.getElementById('colorPalette');
+const status = document.getElementById('status');
+const cooldownEl = document.getElementById('cooldown');
 
-/* ========= DOM ========= */
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const colorPalette = document.getElementById("colorPalette");
-const sizeSlider = document.getElementById("sizeSlider");
-const sizeValue = document.getElementById("sizeValue");
-const drawBtn = document.getElementById("drawBtn");
-const panBtn = document.getElementById("panBtn");
-const undoBtn = document.getElementById("undoBtn");
-const clearBtn = document.getElementById("clearBtn");
-const status = document.getElementById("status");
-const zoomInfo = document.getElementById("zoomInfo");
-
-/* ========= COLORS ========= */
 const colors = [
-    "#FF0000","#00FF00","#0000FF","#FFFF00",
-    "#FF00FF","#00FFFF","#FFA500","#800080",
-    "#FFC0CB","#A52A2A","#808080","#000000",
-    "#FFFFFF","#008000","#000080","#800000"
+    '#FF0000','#00FF00','#0000FF','#FFFF00','#FF00FF','#00FFFF','#FFA500','#800080',
+    '#FFC0CB','#A52A2A','#808080','#000000','#FFFFFF','#008000','#000080','#800000'
 ];
 
-let currentColor = "#000000";
-let brushSize = 2;
-
-/* ========= STATE ========= */
+let currentColor = '#000000';
 let isDrawing = false;
 let isPanning = false;
-let currentTool = "draw";
-
-let lastX = 0, lastY = 0;
-
-/* Zoom + pan */
+let currentTool = 'draw';
 let scale = 1;
 let translateX = 0;
 let translateY = 0;
-
+let lastX = 0;
+let lastY = 0;
 let panStartX = 0;
 let panStartY = 0;
-let panOriginX = 0;
-let panOriginY = 0;
 
-/* Realtime */
-let isConnected = false;
-let lineBuffer = [];
-let allDrawnLines = new Set();
-
-/* Admin mode */
+let sessionId = Date.now()+'-'+Math.random().toString(36).substr(2,9);
+let lastPlaced = 0;
 let isAdmin = false;
+let placeInterval = 300000; // 5 min default
+const adminIP = '69.170.112.226';
 
-/* ========= COLOR BUTTONS ========= */
-colors.forEach(c=>{
-    const btn = document.createElement("div");
-    btn.className="color-btn";
-    btn.style.background=c;
+const tileSize = 50; // 50x50 tiles for rendering
+const boardWidth = 5000;
+const boardHeight = 5000;
+const cols = Math.ceil(boardWidth/tileSize);
+const rows = Math.ceil(boardHeight/tileSize);
 
-    if (c===currentColor) btn.classList.add("active");
+let tiles = [];
+for(let r=0;r<rows;r++){
+    tiles[r]=[];
+    for(let c=0;c<cols;c++){
+        tiles[r][c]=ctx.createImageData(tileSize,tileSize);
+    }
+}
 
-    btn.onclick=()=>{
-        currentColor=c;
-        document.querySelectorAll(".color-btn")
-            .forEach(b=>b.classList.remove("active"));
-        btn.classList.add("active");
-    };
+// Initialize Firebase-like fetch functions
+const pixelsRef = FIREBASE_DB_URL+'/pixels.json';
+const cursorsRef = FIREBASE_DB_URL+'/cursors.json';
 
+async function checkAdmin() {
+    try {
+        const resp = await fetch('https://api.ipify.org?format=json');
+        const data = await resp.json();
+        if(data.ip===adminIP){
+            isAdmin=true;
+            placeInterval=1000;
+            status.textContent='👑 Admin Mode';
+        }
+    } catch(err){console.log('IP check skipped');}
+}
+
+checkAdmin();
+
+// Color palette buttons
+colors.forEach(color=>{
+    const btn=document.createElement('div');
+    btn.className='color-btn';
+    btn.style.backgroundColor=color;
+    if(color===currentColor) btn.classList.add('active');
+    btn.addEventListener('click',()=>{
+        currentColor=color;
+        document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));
+        btn.classList.add('active');
+    });
     colorPalette.appendChild(btn);
 });
 
-/* ========= TOOL BUTTONS ========= */
-drawBtn.onclick = () => {
-    currentTool = "draw";
-    drawBtn.classList.add("active");
-    panBtn.classList.remove("active");
-    canvas.classList.remove("pan-mode");
-};
+// Tool buttons
+document.getElementById('drawBtn').addEventListener('click',()=>{
+    currentTool='draw';
+    canvas.style.cursor='crosshair';
+});
+document.getElementById('panBtn').addEventListener('click',()=>{
+    currentTool='pan';
+    canvas.style.cursor='grab';
+});
 
-panBtn.onclick = () => {
-    currentTool = "pan";
-    panBtn.classList.add("active");
-    drawBtn.classList.remove("active");
-    canvas.classList.add("pan-mode");
-};
-
-/* ========= ADMIN CHECK ========= */
-fetch("https://api.ipify.org?format=json")
-    .then(r=>r.json())
-    .then(ip=>{
-        if (ip.ip === "69.170.112.226") {
-            isAdmin = true;
-            sizeSlider.classList.add("admin-mode");
-            sizeSlider.max = 1000;
-            status.classList.add("admin");
-            status.textContent = "🛠 Admin Mode";
-        }
-    });
-
-/* ========= BRUSH SIZE ========= */
-sizeSlider.oninput=e=>{
-    brushSize = parseInt(e.target.value);
-    sizeValue.textContent = brushSize;
-};
-
-/* ========= TRANSFORM ========= */
-function applyTransform() {
-    canvas.style.transform =
-        `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-    zoomInfo.textContent = `Zoom: ${Math.round(scale*100)}%`;
+// Transform update
+function updateTransform(){
+    canvas.style.transform=`translate(${translateX}px,${translateY}px) scale(${scale})`;
+    document.getElementById('zoomInfo').textContent=`Zoom: ${Math.round(scale*100)}%`;
 }
-
-function getCanvasCoords(x, y) {
-    const rect = canvas.getBoundingClientRect();
+function getCanvasCoords(x,y){
+    const rect=canvas.getBoundingClientRect();
     return {
-        x: (x - rect.left) / scale,
-        y: (y - rect.top) / scale
+        x: Math.floor((x-rect.left)/scale),
+        y: Math.floor((y-rect.top)/scale)
     };
 }
 
-/* ========= DRAWING ========= */
-function drawLine(x1,y1,x2,y2,color,size){
-    ctx.strokeStyle=color;
-    ctx.lineWidth=size;
-    ctx.lineCap="round";
-    ctx.lineJoin="round";
-    ctx.beginPath();
-    ctx.moveTo(x1,y1);
-    ctx.lineTo(x2,y2);
-    ctx.stroke();
+// Draw pixel
+function drawPixel(x,y,color){
+    ctx.fillStyle=color;
+    ctx.fillRect(x,y,1,1);
 }
 
-canvas.addEventListener("mousedown", e=>{
-    if (currentTool==="draw") {
-        isDrawing = true;
-        const c = getCanvasCoords(e.clientX, e.clientY);
-        lastX=c.x; lastY=c.y;
+// Fetch all pixels and draw
+async function loadAllPixels(){
+    try{
+        const resp=await fetch(pixelsRef);
+        const data=await resp.json();
+        if(data){
+            Object.entries(data).forEach(([key,pixel])=>{
+                drawPixel(pixel.x,pixel.y,pixel.color);
+            });
+        }
+        status.textContent='🟢 Live';
+    }catch(err){
+        console.error(err);
+        status.textContent='⚠️ Load error';
+        status.classList.add('error');
     }
-    else if (currentTool==="pan") {
-        isPanning = true;
-        panStartX = e.clientX;
-        panStartY = e.clientY;
-        panOriginX = translateX;
-        panOriginY = translateY;
+}
+
+loadAllPixels();
+
+// Handle mouse/touch
+canvas.addEventListener('mousedown',e=>{
+    if(currentTool==='draw') isDrawing=true;
+    else if(currentTool==='pan'){
+        isPanning=true;
+        panStartX=e.clientX-translateX;
+        panStartY=e.clientY-translateY;
+        canvas.style.cursor='grabbing';
+    }
+    const coords=getCanvasCoords(e.clientX,e.clientY);
+    lastX=coords.x;
+    lastY=coords.y;
+});
+canvas.addEventListener('mousemove',e=>{
+    if(isDrawing && currentTool==='draw'){
+        const coords=getCanvasCoords(e.clientX,e.clientY);
+        lastX=coords.x;
+        lastY=coords.y;
+    } else if(isPanning){
+        translateX=e.clientX-panStartX;
+        translateY=e.clientY-panStartY;
+        updateTransform();
     }
 });
-
-canvas.addEventListener("mousemove", e=>{
-    if (isDrawing && currentTool==="draw") {
-        const c = getCanvasCoords(e.clientX, e.clientY);
-        drawLine(lastX,lastY,c.x,c.y,currentColor,brushSize);
-        lineBuffer.push({
-            x1:lastX, y1:lastY,
-            x2:c.x,  y2:c.y,
-            color:currentColor,
-            size:brushSize,
-            timestamp:Date.now()
-        });
-        lastX=c.x; lastY=c.y;
+canvas.addEventListener('mouseup',async e=>{
+    if(isDrawing){
+        const now=Date.now();
+        if(now-lastPlaced>=placeInterval){
+            const coords=getCanvasCoords(e.clientX,e.clientY);
+            drawPixel(coords.x,coords.y,currentColor);
+            try{
+                await fetch(pixelsRef+'/'+coords.x+'_'+coords.y+'.json',{
+                    method:'PUT',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({x:coords.x,y:coords.y,color:currentColor,timestamp:Date.now()})
+                });
+                lastPlaced=Date.now();
+            }catch(err){console.error(err);}
+        }
     }
-    else if (isPanning && currentTool==="pan") {
-        translateX = panOriginX + (e.clientX - panStartX);
-        translateY = panOriginY + (e.clientY - panStartY);
-        applyTransform();
-    }
+    isDrawing=false;
+    isPanning=false;
+    canvas.style.cursor=currentTool==='draw'?'crosshair':'grab';
 });
 
-canvas.addEventListener("mouseup", ()=>{ isDrawing=false; isPanning=false; });
-canvas.addEventListener("mouseleave", ()=>{ isDrawing=false; isPanning=false; });
-
-/* ========= ZOOM ========= */
-canvas.addEventListener("wheel", e=>{
+// Zoom
+canvas.addEventListener('wheel',e=>{
     e.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    const mx=e.clientX-rect.left;
+    const my=e.clientY-rect.top;
+    const delta=e.deltaY>0?0.9:1.1;
+    const newScale=Math.min(Math.max(0.1,scale*delta),10);
+    const change=newScale/scale;
+    translateX=mx-(mx-translateX)*change;
+    translateY=my-(my-translateY)*change;
+    scale=newScale;
+    updateTransform();
+},{passive:false});
 
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+// Cooldown display
+setInterval(()=>{
+    if(lastPlaced===0) cooldownEl.textContent='Ready';
+    else{
+        const remaining=Math.max(0,placeInterval-(Date.now()-lastPlaced));
+        const sec=Math.ceil(remaining/1000);
+        cooldownEl.textContent=isAdmin?'Admin cooldown: '+sec+'s':'Cooldown: '+sec+'s';
+    }
+},1000);
 
-    const prevScale = scale;
-    const delta = e.deltaY>0 ? 0.9 : 1.1;
-    scale = Math.min(Math.max(scale * delta, 0.2), 10);
-    const factor = scale / prevScale;
-
-    translateX = mx - (mx - translateX) * factor;
-    translateY = my - (my - translateY) * factor;
-
-    applyTransform();
-});
-
-/* ========= CLEAR ========= */
-clearBtn.onclick=async()=>{
-    if (!confirm("Clear canvas for everyone?")) return;
-
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    allDrawnLines.clear();
-
-    await fetch(linesRef,{method:"DELETE"});
-
-    await fetch(clearRef,{
-        method:"PUT",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({timestamp:Date.now()})
-    });
-};
-
-/* ========= LOAD EXISTING LINES ========= */
-async function loadAll() {
-    try {
-        const res = await fetch(linesRef);
-        const data = await res.json();
-        if (!data) return;
-
-        const lines = Object.entries(data)
-            .map(([id,l])=>({...l,id}))
-            .sort((a,b)=>a.timestamp-b.timestamp);
-
-        lines.forEach(line=>{
-            if (!allDrawnLines.has(line.id)){
-                drawLine(line.x1,line.y1,line.x2,line.y2,line.color,line.size);
-                allDrawnLines.add(line.id);
-            }
-        });
-    } catch(err){}
-}
-
-/* ========= SYNC ========= */
+// Realtime sync
 setInterval(async()=>{
-    if (!lineBuffer.length) return;
-
-    const batch = [...lineBuffer];
-    lineBuffer = [];
-
-    const updates = {};
-    batch.forEach(l=>{
-        const id = "L"+Math.random().toString(36).slice(2);
-        updates[id]=l;
-        allDrawnLines.add(id);
-    });
-
-    await fetch(linesRef,{
-        method:"PATCH",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(updates)
-    });
-
-    status.textContent="🟢 Live";
-},120);
-
-setInterval(async()=>{
-    try {
-        const r = await fetch(linesRef);
-        const d = await r.json();
-        if (d) {
-            for (const [id,l] of Object.entries(d)) {
-                if (!allDrawnLines.has(id)) {
-                    drawLine(l.x1,l.y1,l.x2,l.y2,l.color,l.size);
-                    allDrawnLines.add(id);
-                }
-            }
+    try{
+        const resp=await fetch(pixelsRef);
+        const data=await resp.json();
+        if(data){
+            Object.entries(data).forEach(([key,pixel])=>{
+                drawPixel(pixel.x,pixel.y,pixel.color);
+            });
         }
-
-        const clrR = await fetch(clearRef);
-        const clr = await clrR.json();
-        if (clr && clr.timestamp>(window.lastClear||0)) {
-            window.lastClear = clr.timestamp;
-            ctx.clearRect(0,0,canvas.width,canvas.height);
-            allDrawnLines.clear();
-        }
-    } catch(err){}
-},300);
-
-/* INIT */
-loadAll();
-applyTransform();
+    }catch(err){}
+},3000);
 
 </script>
 </body>
