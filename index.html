@@ -3,33 +3,38 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>LAN Drawing Board (Instant Sync)</title>
+<title>LAN Drawing Board</title>
 
 <style>
   html, body {
     margin: 0; padding: 0; overflow: hidden;
     font-family: Arial, sans-serif;
-    background: #f0f0f0;
+    background: #2a2a2a;
     user-select: none;
   }
   #canvasContainer {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 80px;
-    background: #fff;
+    background: #2a2a2a;
     overflow: hidden;
   }
   canvas {
+    position: absolute;
+    top: 50%;
+    left: 50%;
     display: block;
     transform-origin: 0 0;
-    image-rendering: pixelated;
+    image-rendering: auto;
     background: #fff;
+    border: 3px solid #000;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
   }
   #toolbar {
     position: fixed;
     bottom: 0; left: 0; right: 0;
     height: 80px;
     background: #fff;
-    border-top: 1px solid #ccc;
+    border-top: 2px solid #000;
     display: flex;
     justify-content: center;
     align-items: center;
@@ -39,49 +44,66 @@
   .toolButton {
     padding: 10px 18px;
     border-radius: 6px;
-    border: 1px solid #aaa;
+    border: 2px solid #333;
     cursor: pointer;
     user-select: none;
+    background: #f5f5f5;
+    font-weight: bold;
+  }
+  .toolButton:hover {
+    background: #e0e0e0;
   }
   .toolButton.active {
-    background: #ddd;
+    background: #4CAF50;
+    color: white;
+    border-color: #2e7d32;
   }
   #paletteContainer {
     display: flex;
     gap: 6px;
   }
   .color {
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
     border-radius: 4px;
-    border: 2px solid transparent;
+    border: 2px solid #ccc;
     cursor: pointer;
     box-sizing: border-box;
   }
+  .color:hover {
+    transform: scale(1.1);
+  }
   .color.active {
-    border-color: black;
+    border-color: #000;
+    border-width: 3px;
   }
   #brushSize {
-    width: 200px;
+    width: 150px;
+  }
+  .sizeLabel {
+    font-weight: bold;
+    font-size: 14px;
   }
 </style>
 </head>
 <body>
 
 <div id="canvasContainer">
-  <canvas id="canvas" width="5000" height="4000" style="border:4px solid black;"></canvas>
+  <canvas id="canvas" width="1200" height="800"></canvas>
 </div>
 
 <div id="toolbar">
   <div id="paletteContainer"></div>
-  <div>
+  <div class="sizeLabel">
     Size:
-    <input type="range" id="brushSize" min="2" max="30" value="6">
+    <input type="range" id="brushSize" min="1" max="40" value="8">
+    <span id="sizeDisplay">8</span>
   </div>
 
-  <div id="pencilBtn" class="toolButton active">Pencil</div>
-  <div id="panBtn" class="toolButton">Pan</div>
-  <div id="eraserBtn" class="toolButton">Eraser</div>
+  <div id="pencilBtn" class="toolButton active">✏️ Pencil</div>
+  <div id="eraserBtn" class="toolButton">🧹 Eraser</div>
+  <div id="panBtn" class="toolButton">👆 Pan</div>
+  <div id="clearBtn" class="toolButton">🗑️ Clear</div>
 </div>
 
 <script>
@@ -91,30 +113,60 @@ const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com";
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const brushSizeEl = document.getElementById("brushSize");
+const sizeDisplay = document.getElementById("sizeDisplay");
 const paletteContainer = document.getElementById("paletteContainer");
 let currentTool = "pencil";
 
 const pencilBtn = document.getElementById("pencilBtn");
-const panBtn = document.getElementById("panBtn");
 const eraserBtn = document.getElementById("eraserBtn");
-eraserBtn.onclick = () => switchTool("eraser");
+const panBtn = document.getElementById("panBtn");
+const clearBtn = document.getElementById("clearBtn");
 
 pencilBtn.onclick = () => switchTool("pencil");
+eraserBtn.onclick = () => switchTool("eraser");
 panBtn.onclick = () => switchTool("pan");
+clearBtn.onclick = () => {
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+};
+
+brushSizeEl.oninput = () => {
+  sizeDisplay.textContent = brushSizeEl.value;
+};
 
 function switchTool(t) {
   currentTool = t;
   pencilBtn.classList.toggle("active", t === "pencil");
-  panBtn.classList.toggle("active", t === "pan");
   eraserBtn.classList.toggle("active", t === "eraser");
+  panBtn.classList.toggle("active", t === "pan");
+  
+  if (t === "pan") {
+    canvas.style.cursor = "grab";
+  } else if (t === "eraser") {
+    canvas.style.cursor = "cell";
+  } else {
+    canvas.style.cursor = "crosshair";
+  }
 }
 
-/* PALETTE */
+/* PALETTE - 16 ESSENTIAL COLORS */
 const colors = [
-  "#6D001A","#BE0039","#FF4500","#FFA800","#FFD635","#FFF8B8","#00A368","#00CC78",
-  "#7EED56","#00756F","#009EAA","#00CCC0","#2450A4","#3690EA","#51E9F4","#493AC1",
-  "#6A5CFF","#811E9F","#B44AC0","#FF3881","#FF99AA","#6D482F","#9C6926","#000000",
-  "#898D90","#D4D7D9","#FFFFFF"
+  "#000000", // Black
+  "#FFFFFF", // White
+  "#FF0000", // Red
+  "#00FF00", // Green
+  "#0000FF", // Blue
+  "#FFFF00", // Yellow
+  "#FF00FF", // Magenta
+  "#00FFFF", // Cyan
+  "#FF8800", // Orange
+  "#8800FF", // Purple
+  "#00FF88", // Mint
+  "#FF0088", // Pink
+  "#888888", // Gray
+  "#8B4513", // Brown
+  "#FFB6C1", // Light Pink
+  "#4169E1"  // Royal Blue
 ];
 
 let currentColor = colors[0];
@@ -134,345 +186,204 @@ function drawPalette() {
 }
 drawPalette();
 
-/* PAN + ZOOM */
+// Initialize with white background
+ctx.fillStyle = "#fff";
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+/* PAN + ZOOM with proper transform handling */
 let scale = 1;
-let tx = 0, ty = 0;
+let offsetX = 0;
+let offsetY = 0;
 
 function updateTransform() {
-  canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  canvas.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
 }
-updateTransform();
+
+// Center canvas initially
+function centerCanvas() {
+  offsetX = -canvas.width / 2;
+  offsetY = -canvas.height / 2;
+  updateTransform();
+}
+centerCanvas();
+
+// Handle window resize
+window.addEventListener('resize', () => {
+  centerCanvas();
+});
 
 let isPanning = false;
-let panStartX = 0, panStartY = 0, lastTx = 0, lastTy = 0;
+let panStartX = 0, panStartY = 0, lastOffsetX = 0, lastOffsetY = 0;
 
 canvas.addEventListener("mousedown", e => {
   if (currentTool === "pan") {
     isPanning = true;
     panStartX = e.clientX;
     panStartY = e.clientY;
-    lastTx = tx;
-    lastTy = ty;
+    lastOffsetX = offsetX;
+    lastOffsetY = offsetY;
+    canvas.style.cursor = "grabbing";
+    e.preventDefault();
   }
 });
-window.addEventListener("mouseup", () => isPanning = false);
+
+window.addEventListener("mouseup", () => {
+  isPanning = false;
+  if (currentTool === "pan") canvas.style.cursor = "grab";
+});
+
 window.addEventListener("mousemove", e => {
   if (isPanning) {
-    tx = lastTx + (e.clientX - panStartX);
-    ty = lastTy + (e.clientY - panStartY);
+    offsetX = lastOffsetX + (e.clientX - panStartX);
+    offsetY = lastOffsetY + (e.clientY - panStartY);
     updateTransform();
   }
 });
 
 canvas.addEventListener("wheel", e => {
   e.preventDefault();
+  
   const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
 
   const factor = e.deltaY > 0 ? 0.9 : 1.1;
-  const newScale = Math.min(Math.max(0.15, scale * factor)), 12);
+  const newScale = Math.min(Math.max(0.2, scale * factor), 8);
 
-  tx = mx - (mx - tx) * (newScale / scale);
-  ty = my - (my - ty) * (newScale / scale);
+  // Adjust offset to zoom towards mouse position
+  offsetX = mouseX - (mouseX - offsetX) * (newScale / scale);
+  offsetY = mouseY - (mouseY - offsetY) * (newScale / scale);
   scale = newScale;
 
   updateTransform();
 }, { passive: false });
 
-/* DRAWING (NO CIRCLES — RAW PIXELS) */
+/* DRAWING with smooth curves */
 let drawing = false;
+let lastX = null;
+let lastY = null;
 
 canvas.addEventListener("mousedown", e => {
-  if (currentTool !== "pencil") return;
+  if (currentTool !== "pencil" && currentTool !== "eraser") return;
   if (e.button !== 0) return;
   drawing = true;
-  drawAtEvent(e);
-});
-window.addEventListener("mouseup", () => drawing = false);
-canvas.addEventListener("mousemove", e => {
-  if (drawing && currentTool === "pencil") drawAtEvent(e);
-});
-
-function drawAtEvent(e) {
-  const rect = canvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX - rect.left) / scale);
-  const y = Math.floor((e.clientY - rect.top) / scale);
-  const size = parseInt(brushSizeEl.value);
-
-  drawPixelStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
-  sendStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
-}
-
-function drawPixelStroke(cx, cy, size, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(cx - size/2, cy - size/2, size, size);
-}
-
-/* INSTANT SYNC — LONGPOLL STREAM */
-async function sendStroke(x, y, size, color) {
-  fetch(`${FIREBASE_DB_URL}/draws.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ x, y, size, color, time: Date.now() })
-  }).catch(()=>{});
-}
-
-async function startRealtime() {
-  const url = `${FIREBASE_DB_URL}/draws.json?orderBy=\"time\"&limitToLast=1`;
-
-  while (true) {
-    try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data) {
-        const d = Object.values(data)[0];
-        drawPixelStroke(d.x, d.y, d.size, d.color);
-      }
-    } catch{}
-    await new Promise(r => setTimeout(r, 100));
-  }
-}
-startRealtime();
-</script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>LAN Drawing Board (Instant Sync)</title>
-
-<style>
-  html, body {
-    margin: 0; padding: 0; overflow: hidden;
-    font-family: Arial, sans-serif;
-    background: #f0f0f0;
-    user-select: none;
-  }
-  #canvasContainer {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 80px;
-    background: #fff;
-    overflow: hidden;
-  }
-  canvas {
-    display: block;
-    transform-origin: 0 0;
-    image-rendering: pixelated;
-    background: #fff;
-  }
-  #toolbar {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    height: 80px;
-    background: #fff;
-    border-top: 1px solid #ccc;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 20px;
-    padding: 6px;
-  }
-  .toolButton {
-    padding: 10px 18px;
-    border-radius: 6px;
-    border: 1px solid #aaa;
-    cursor: pointer;
-    user-select: none;
-  }
-  .toolButton.active {
-    background: #ddd;
-  }
-  #paletteContainer {
-    display: flex;
-    gap: 6px;
-  }
-  .color {
-    width: 26px;
-    height: 26px;
-    border-radius: 4px;
-    border: 2px solid transparent;
-    cursor: pointer;
-    box-sizing: border-box;
-  }
-  .color.active {
-    border-color: black;
-  }
-  #brushSize {
-    width: 200px;
-  }
-</style>
-</head>
-<body>
-
-<div id="canvasContainer">
-  <canvas id="canvas" width="5000" height="4000" style="border:4px solid black;"></canvas>
-</div>
-
-<div id="toolbar">
-  <div id="paletteContainer"></div>
-  <div>
-    Size:
-    <input type="range" id="brushSize" min="2" max="30" value="6">
-  </div>
-
-  <div id="pencilBtn" class="toolButton active">Pencil</div>
-  <div id="panBtn" class="toolButton">Pan</div>
-  <div id="eraserBtn" class="toolButton">Eraser</div>
-</div>
-
-<script>
-/* CONFIG */
-const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com";
-
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const brushSizeEl = document.getElementById("brushSize");
-const paletteContainer = document.getElementById("paletteContainer");
-let currentTool = "pencil";
-
-const pencilBtn = document.getElementById("pencilBtn");
-const panBtn = document.getElementById("panBtn");
-const eraserBtn = document.getElementById("eraserBtn");
-eraserBtn.onclick = () => switchTool("eraser");
-
-pencilBtn.onclick = () => switchTool("pencil");
-panBtn.onclick = () => switchTool("pan");
-
-function switchTool(t) {
-  currentTool = t;
-  pencilBtn.classList.toggle("active", t === "pencil");
-  panBtn.classList.toggle("active", t === "pan");
-  eraserBtn.classList.toggle("active", t === "eraser");
-}
-
-/* PALETTE */
-const colors = [
-  "#6D001A","#BE0039","#FF4500","#FFA800","#FFD635","#FFF8B8","#00A368","#00CC78",
-  "#7EED56","#00756F","#009EAA","#00CCC0","#2450A4","#3690EA","#51E9F4","#493AC1",
-  "#6A5CFF","#811E9F","#B44AC0","#FF3881","#FF99AA","#6D482F","#9C6926","#000000",
-  "#898D90","#D4D7D9","#FFFFFF"
-];
-
-let currentColor = colors[0];
-function drawPalette() {
-  paletteContainer.innerHTML = "";
-  colors.forEach(c => {
-    const div = document.createElement("div");
-    div.className = "color" + (c === currentColor ? " active" : "");
-    div.style.backgroundColor = c;
-    div.onclick = () => {
-      currentColor = c;
-      document.querySelectorAll(".color").forEach(el => el.classList.remove("active"));
-      div.classList.add("active");
-    };
-    paletteContainer.appendChild(div);
-  });
-}
-drawPalette();
-
-/* PAN + ZOOM */
-let scale = 1;
-let tx = 0, ty = 0;
-
-function updateTransform() {
-  canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-}
-updateTransform();
-
-let isPanning = false;
-let panStartX = 0, panStartY = 0, lastTx = 0, lastTy = 0;
-
-canvas.addEventListener("mousedown", e => {
-  if (currentTool === "pan") {
-    isPanning = true;
-    panStartX = e.clientX;
-    panStartY = e.clientY;
-    lastTx = tx;
-    lastTy = ty;
-  }
-});
-window.addEventListener("mouseup", () => isPanning = false);
-window.addEventListener("mousemove", e => {
-  if (isPanning) {
-    tx = lastTx + (e.clientX - panStartX);
-    ty = lastTy + (e.clientY - panStartY);
-    updateTransform();
-  }
-});
-
-canvas.addEventListener("wheel", e => {
+  
+  const coords = getCanvasCoords(e);
+  lastX = coords.x;
+  lastY = coords.y;
+  
+  drawAtCoords(coords.x, coords.y);
   e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-
-  const factor = e.deltaY > 0 ? 0.9 : 1.1;
-  const newScale = Math.min(Math.max(0.15, scale * factor)), 12);
-
-  tx = mx - (mx - tx) * (newScale / scale);
-  ty = my - (my - ty) * (newScale / scale);
-  scale = newScale;
-
-  updateTransform();
-}, { passive: false });
-
-/* DRAWING (NO CIRCLES — RAW PIXELS) */
-let drawing = false;
-
-canvas.addEventListener("mousedown", e => {
-  if (currentTool !== "pencil") return;
-  if (e.button !== 0) return;
-  drawing = true;
-  drawAtEvent(e);
 });
-window.addEventListener("mouseup", () => drawing = false);
+
+window.addEventListener("mouseup", () => {
+  drawing = false;
+  lastX = null;
+  lastY = null;
+});
+
 canvas.addEventListener("mousemove", e => {
-  if (drawing && currentTool === "pencil") drawAtEvent(e);
+  if (drawing && (currentTool === "pencil" || currentTool === "eraser")) {
+    const coords = getCanvasCoords(e);
+    drawAtCoords(coords.x, coords.y);
+  }
 });
 
-function drawAtEvent(e) {
+function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX - rect.left) / scale);
-  const y = Math.floor((e.clientY - rect.top) / scale);
+  const x = (e.clientX - rect.left - offsetX) / scale;
+  const y = (e.clientY - rect.top - offsetY) / scale;
+  return { x, y };
+}
+
+function drawAtCoords(x, y) {
   const size = parseInt(brushSizeEl.value);
+  const color = currentTool === "eraser" ? "#ffffff" : currentColor;
 
-  drawPixelStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
-  sendStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
+  // Clamp to canvas bounds
+  const clampedX = Math.max(0, Math.min(canvas.width, x));
+  const clampedY = Math.max(0, Math.min(canvas.height, y));
+
+  // Draw smooth line from last position
+  if (lastX !== null && lastY !== null) {
+    drawSmoothLine(lastX, lastY, clampedX, clampedY, size, color);
+  } else {
+    drawBrushStroke(clampedX, clampedY, size, color);
+  }
+  
+  lastX = clampedX;
+  lastY = clampedY;
+  
+  sendStroke(clampedX, clampedY, size, color);
 }
 
-function drawPixelStroke(cx, cy, size, color) {
+function drawSmoothLine(x1, y1, x2, y2, size, color) {
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  const steps = Math.max(1, Math.ceil(dist));
+  
   ctx.fillStyle = color;
-  ctx.fillRect(cx - size/2, cy - size/2, size, size);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  
+  // Use circles for smooth curves
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = x1 + (x2 - x1) * t;
+    const y = y1 + (y2 - y1) * t;
+    
+    ctx.beginPath();
+    ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
-/* INSTANT SYNC — LONGPOLL STREAM */
+function drawBrushStroke(x, y, size, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, size / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* INSTANT SYNC */
 async function sendStroke(x, y, size, color) {
-  fetch(`${FIREBASE_DB_URL}/draws.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ x, y, size, color, time: Date.now() })
-  }).catch(()=>{});
+  try {
+    await fetch(`${FIREBASE_DB_URL}/draws.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ x, y, size, color, time: Date.now() })
+    });
+  } catch(e) {
+    console.log("Sync failed:", e);
+  }
 }
 
 async function startRealtime() {
-  const url = `${FIREBASE_DB_URL}/draws.json?orderBy=\"time\"&limitToLast=1`;
+  const url = `${FIREBASE_DB_URL}/draws.json?orderBy="time"&limitToLast=1`;
+  let lastTime = Date.now();
 
   while (true) {
     try {
       const res = await fetch(url);
       const data = await res.json();
       if (data) {
-        const d = Object.values(data)[0];
-        drawPixelStroke(d.x, d.y, d.size, d.color);
+        const entries = Object.values(data);
+        entries.forEach(d => {
+          if (d.time > lastTime) {
+            drawBrushStroke(d.x, d.y, d.size, d.color);
+            lastTime = d.time;
+          }
+        });
       }
-    } catch{}
+    } catch(e) {
+      console.log("Realtime fetch failed:", e);
+    }
     await new Promise(r => setTimeout(r, 100));
   }
 }
 startRealtime();
+
+// Set initial cursor
+canvas.style.cursor = "crosshair";
 </script>
 </body>
 </html>
