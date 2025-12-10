@@ -345,14 +345,24 @@ console.error('Inactive check error:', error);
 
 async function clearAllData() {
 try {
+// Clear the database
 await fetch(linesRef, { method: 'DELETE' });
 await fetch(cursorsRef, { method: 'DELETE' });
 await fetch(presenceRef, { method: 'DELETE' });
+        
+// Clear local canvas and state
 ctx.clearRect(0, 0, canvas.width, canvas.height);
 history = [];
 historyStep = -1;
 processedLineIds.clear();
+lastLineId = 0;
 updateUndoRedoButtons();
+        
+status.textContent = '🟢 Canvas Auto-Cleared';
+setTimeout(() => {
+if (isConnected) status.textContent = '🟢 Live';
+}, 2000);
+        
 console.log('Canvas cleared due to inactivity');
 } catch (error) {
 console.error('Clear all data error:', error);
@@ -451,15 +461,33 @@ const response = await fetch(linesRef);
 const data = await response.json();
 
 if (data) {
-const newLines = Object.entries(data)
+const allLines = Object.entries(data)
 .map(([id, line]) => ({ ...line, id }))
-.filter(line => line.sessionId !== sessionId && !processedLineIds.has(line.id))
 .sort((a, b) => a.timestamp - b.timestamp);
+
+// Draw any new lines we haven't seen yet
+const newLines = allLines.filter(line => 
+line.sessionId !== sessionId && !processedLineIds.has(line.id)
+);
 
 newLines.forEach(line => {
 drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
 processedLineIds.add(line.id);
 });
+
+// Keep track of all line IDs in the database
+const dbLineIds = new Set(allLines.map(line => line.id));
+                    
+// If our processed set is larger than what's in DB, DB was cleared
+if (processedLineIds.size > dbLineIds.size * 2) {
+// Database was cleared, redraw everything from DB
+ctx.clearRect(0, 0, canvas.width, canvas.height);
+processedLineIds.clear();
+allLines.forEach(line => {
+drawLine(line.x1, line.y1, line.x2, line.y2, line.color, line.size);
+processedLineIds.add(line.id);
+});
+}
 }
 
 const cursorsResponse = await fetch(cursorsRef);
