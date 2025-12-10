@@ -69,7 +69,7 @@
 <body>
 
 <div id="canvasContainer">
-  <canvas id="canvas" width="5000" height="4000"></canvas>
+  <canvas id="canvas" width="5000" height="4000" style="border:4px solid black;"></canvas>
 </div>
 
 <div id="toolbar">
@@ -81,6 +81,7 @@
 
   <div id="pencilBtn" class="toolButton active">Pencil</div>
   <div id="panBtn" class="toolButton">Pan</div>
+  <div id="eraserBtn" class="toolButton">Eraser</div>
 </div>
 
 <script>
@@ -95,6 +96,8 @@ let currentTool = "pencil";
 
 const pencilBtn = document.getElementById("pencilBtn");
 const panBtn = document.getElementById("panBtn");
+const eraserBtn = document.getElementById("eraserBtn");
+eraserBtn.onclick = () => switchTool("eraser");
 
 pencilBtn.onclick = () => switchTool("pencil");
 panBtn.onclick = () => switchTool("pan");
@@ -103,6 +106,7 @@ function switchTool(t) {
   currentTool = t;
   pencilBtn.classList.toggle("active", t === "pencil");
   panBtn.classList.toggle("active", t === "pan");
+  eraserBtn.classList.toggle("active", t === "eraser");
 }
 
 /* PALETTE */
@@ -196,8 +200,8 @@ function drawAtEvent(e) {
   const y = Math.floor((e.clientY - rect.top) / scale);
   const size = parseInt(brushSizeEl.value);
 
-  drawPixelStroke(x, y, size, currentColor);
-  sendStroke(x, y, size, currentColor);
+  drawPixelStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
+  sendStroke(x, y, size, currentTool === "eraser" ? "#FFFFFF" : currentColor);
 }
 
 function drawPixelStroke(cx, cy, size, color) {
