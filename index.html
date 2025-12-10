@@ -291,8 +291,8 @@ canvas.addEventListener("mousemove", e => {
 
 function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left - offsetX) / scale;
-  const y = (e.clientY - rect.top - offsetY) / scale;
+  const x = (e.clientX - rect.left) / scale;
+  const y = (e.clientY - rect.top) / scale;
   return { x, y };
 }
 
