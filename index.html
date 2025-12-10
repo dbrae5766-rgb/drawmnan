@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Collaborative Drawing Canvas</title>
+<title>drawing website thing</title>
 <style>
 * {
 margin: 0;
@@ -202,6 +202,7 @@ top: 110px;
 </div>
 <button id="undoBtn" class="tool-btn">↶ Undo</button>
 <button id="redoBtn" class="tool-btn">↷ Redo</button>
+<button id="clearBtn" class="tool-btn" style="display:none;">🗑️ Clear All</button>
 <div class="status" id="status">Connecting...</div>
 </div>
 <div id="canvasContainer">
@@ -219,6 +220,7 @@ const sizeSlider = document.getElementById('sizeSlider');
 const sizeValue = document.getElementById('sizeValue');
 const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
+const clearBtn = document.getElementById('clearBtn');
 const drawBtn = document.getElementById('drawBtn');
 const panBtn = document.getElementById('panBtn');
 const zoomInfo = document.getElementById('zoomInfo');
