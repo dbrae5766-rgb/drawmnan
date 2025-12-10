@@ -311,12 +311,11 @@ function drawAtCoords(x, y) {
     drawSmoothLine(lastX, lastY, clampedX, clampedY, size, color);
   } else {
     drawBrushStroke(clampedX, clampedY, size, color);
+    sendStroke(clampedX, clampedY, size, color);
   }
   
   lastX = clampedX;
   lastY = clampedY;
-  
-  sendStroke(clampedX, clampedY, size, color);
 }
 
 function drawSmoothLine(x1, y1, x2, y2, size, color) {
@@ -327,7 +326,7 @@ function drawSmoothLine(x1, y1, x2, y2, size, color) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   
-  // Use circles for smooth curves
+  // Use circles for smooth curves and send each point
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const x = x1 + (x2 - x1) * t;
@@ -336,6 +335,11 @@ function drawSmoothLine(x1, y1, x2, y2, size, color) {
     ctx.beginPath();
     ctx.arc(x, y, size / 2, 0, Math.PI * 2);
     ctx.fill();
+    
+    // Send individual points for better sync
+    if (i % 3 === 0) { // Send every 3rd point to avoid spam
+      sendStroke(x, y, size, color);
+    }
   }
 }
 
