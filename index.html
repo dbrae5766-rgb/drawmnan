@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>r/place 2022 Clone</title>
+<title>LAN Drawing Board</title>
+
 <style>
   html, body {
     margin: 0; padding: 0; overflow: hidden;
@@ -13,7 +14,7 @@
   }
   #canvasContainer {
     position: absolute;
-    top: 0; left: 0; right: 0; bottom: 60px;
+    top: 0; left: 0; right: 0; bottom: 80px;
     background: #fff;
     cursor: crosshair;
     overflow: hidden;
@@ -24,18 +25,22 @@
     image-rendering: pixelated;
     background: #fff;
   }
-  #paletteContainer {
+  #toolbar {
     position: fixed;
     bottom: 0; left: 0; right: 0;
-    height: 60px;
+    height: 80px;
     background: #fff;
     border-top: 1px solid #ccc;
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
     gap: 6px;
-    padding: 8px 0;
-    user-select: none;
+    padding: 6px;
+  }
+  #paletteContainer {
+    display: flex;
+    gap: 6px;
   }
   .color {
     width: 24px;
@@ -48,281 +53,233 @@
   .color.active {
     border-color: black;
   }
-  #infoBar {
-    position: fixed;
-    bottom: 60px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(255 255 255 / 0.9);
-    padding: 4px 12px;
-    font-size: 14px;
-    font-weight: 600;
-    border-radius: 8px 8px 0 0;
-    display: flex;
-    gap: 20px;
-    user-select: none;
-    min-width: 200px;
-    justify-content: center;
+  #brushSize {
+    width: 200px;
   }
 </style>
 </head>
 <body>
 
 <div id="canvasContainer">
-  <canvas id="canvas" width="5000" height="5000"></canvas>
+  <canvas id="canvas" width="3000" height="2000"></canvas>
 </div>
 
-<div id="infoBar">
-  <div id="coords">X: 0 Y: 0</div>
-  <div id="cooldown">Ready</div>
+<div id="toolbar">
+  <div id="paletteContainer"></div>
+  <div>
+    Brush Size:
+    <input type="range" id="brushSize" min="1" max="20" value="1">
+  </div>
 </div>
-
-<div id="paletteContainer"></div>
 
 <script>
-const FIREBASE_DB_URL = 'https://drawing-ce2f6-default-rtdb.firebaseio.com';
+/* === CONFIG === */
+const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com";
 
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const paletteContainer = document.getElementById('paletteContainer');
-const coordsEl = document.getElementById('coords');
-const cooldownEl = document.getElementById('cooldown');
+/* === INITIALIZE CANVAS === */
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const brushSizeEl = document.getElementById("brushSize");
+const paletteContainer = document.getElementById("paletteContainer");
+let userIP = "unknown";
 
-const canvasWidth = 5000;
-const canvasHeight = 5000;
-
-// r/place 2022 palette colors in order (from your image and r/place reference)
+/* ===========================
+      PALETTE
+=========================== */
 const colors = [
-  '#6D001A','#BE0039','#FF4500','#FFA800','#FFD635','#FFF8B8','#00A368','#00CC78',
-  '#7EED56','#00756F','#009EAA','#00CCC0','#2450A4','#3690EA','#51E9F4','#493AC1',
-  '#6A5CFF','#811E9F','#B44AC0','#FF3881','#FF99AA','#6D482F','#9C6926','#000000',
-  '#898D90','#D4D7D9','#FFFFFF'
+  "#6D001A","#BE0039","#FF4500","#FFA800","#FFD635","#FFF8B8","#00A368","#00CC78",
+  "#7EED56","#00756F","#009EAA","#00CCC0","#2450A4","#3690EA","#51E9F4","#493AC1",
+  "#6A5CFF","#811E9F","#B44AC0","#FF3881","#FF99AA","#6D482F","#9C6926","#000000",
+  "#898D90","#D4D7D9","#FFFFFF"
 ];
 
 let currentColor = colors[0];
-let lastPlaced = 0;
-let placeInterval = 300000; // 5 minutes
-const adminIP = '69.170.112.226';
 
-// Transform vars
-let scale = 1, tx = 0, ty = 0;
-function updateTransform(){
-  canvas.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
-}
-updateTransform();
-
-// Draw palette
-function drawPalette(){
-  paletteContainer.innerHTML = '';
-  colors.forEach(c=>{
-    const div = document.createElement('div');
-    div.className = 'color' + (c === currentColor ? ' active' : '');
+function drawPalette() {
+  paletteContainer.innerHTML = "";
+  colors.forEach(c => {
+    const div = document.createElement("div");
+    div.className = "color" + (c === currentColor ? " active" : "");
     div.style.backgroundColor = c;
-    div.title = c;
-    div.addEventListener('click', () => {
+    div.addEventListener("click", () => {
       currentColor = c;
-      document.querySelectorAll('.color').forEach(el => el.classList.remove('active'));
-      div.classList.add('active');
+      document.querySelectorAll(".color").forEach(el => el.classList.remove("active"));
+      div.classList.add("active");
     });
     paletteContainer.appendChild(div);
   });
 }
 drawPalette();
 
-// Pan variables
+/* ===========================
+      PAN + ZOOM
+=========================== */
+let scale = 1, tx = 0, ty = 0;
+function updateTransform() {
+  canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+}
+updateTransform();
+
 let isPanning = false;
-let panStartX = 0;
-let panStartY = 0;
-let lastTx = tx;
-let lastTy = ty;
-
-canvas.style.cursor = 'grab';
-canvas.addEventListener('mousedown', e => {
-  if (e.button === 1) return; // ignore middle click
-  if (e.button === 0) {
-    // place pixel only on mouse down; ignore drag
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / scale);
-    const y = Math.floor((e.clientY - rect.top) / scale);
-    placePixel(x, y);
-  }
-});
-
-canvas.addEventListener('mousemove', e => {
-  const rect = canvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX - rect.left) / scale);
-  const y = Math.floor((e.clientY - rect.top) / scale);
-  coordsEl.textContent = `X: ${x} Y: ${y}`;
-  redrawOutline(x, y);
-});
-
-canvas.addEventListener('wheel', e => {
-  e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-  const factor = e.deltaY > 0 ? 0.9 : 1.1;
-  const newScale = Math.min(Math.max(0.1, scale * factor), 20);
-  tx = mx - (mx - tx) * (newScale / scale);
-  ty = my - (my - ty) * (newScale / scale);
-  scale = newScale;
-  updateTransform();
-}, { passive: false });
-
-// Pan support (right click drag or space+drag)
+let panStartX = 0, panStartY = 0, lastTx = 0, lastTy = 0;
 let spaceDown = false;
-window.addEventListener('keydown', e => {
-  if (e.code === 'Space') {
+
+window.addEventListener("keydown", e => {
+  if (e.code === "Space") {
     spaceDown = true;
-    canvas.style.cursor = 'grab';
+    canvas.style.cursor = "grab";
   }
 });
-window.addEventListener('keyup', e => {
-  if (e.code === 'Space') {
+window.addEventListener("keyup", e => {
+  if (e.code === "Space") {
     spaceDown = false;
-    canvas.style.cursor = 'crosshair';
+    canvas.style.cursor = "crosshair";
   }
 });
 
-canvas.addEventListener('mousedown', e => {
+canvas.addEventListener("mousedown", e => {
   if (e.button === 2 || spaceDown) {
     isPanning = true;
     panStartX = e.clientX;
     panStartY = e.clientY;
     lastTx = tx;
     lastTy = ty;
-    canvas.style.cursor = 'grabbing';
-    e.preventDefault();
+    canvas.style.cursor = "grabbing";
   }
 });
-
-window.addEventListener('mouseup', e => {
-  if (isPanning) {
-    isPanning = false;
-    canvas.style.cursor = spaceDown ? 'grab' : 'crosshair';
-  }
+window.addEventListener("mouseup", () => {
+  isPanning = false;
+  canvas.style.cursor = spaceDown ? "grab" : "crosshair";
 });
-
-window.addEventListener('mousemove', e => {
+window.addEventListener("mousemove", e => {
   if (isPanning) {
-    const dx = e.clientX - panStartX;
-    const dy = e.clientY - panStartY;
-    tx = lastTx + dx;
-    ty = lastTy + dy;
+    tx = lastTx + (e.clientX - panStartX);
+    ty = lastTy + (e.clientY - panStartY);
     updateTransform();
   }
 });
 
-// Prevent context menu on canvas (right click)
-canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
 
-function placePixel(x, y) {
-  if (x < 0 || y < 0 || x >= canvasWidth || y >= canvasHeight) return;
-  const now = Date.now();
-  if (now - lastPlaced < placeInterval) return;
-  lastPlaced = now;
-  ctx.fillStyle = currentColor;
-  ctx.fillRect(x, y, 1, 1);
-  fetch(`${FIREBASE_DB_URL}/pixels/${x}_${y}.json`, {
-    method: 'PUT',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({x, y, color: currentColor, timestamp: Date.now()})
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  const newScale = Math.min(Math.max(0.1, scale * factor), 20);
+
+  tx = mx - (mx - tx) * (newScale / scale);
+  ty = my - (my - ty) * (newScale / scale);
+  scale = newScale;
+
+  updateTransform();
+}, { passive: false });
+
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+
+/* ===========================
+      IP LOGGING (ONCE)
+=========================== */
+async function fetchIP() {
+  try {
+    const r = await fetch("https://api.ipify.org?format=json");
+    const j = await r.json();
+    userIP = j.ip;
+  } catch {}
+}
+fetchIP();
+
+async function ipAlreadyLogged(ip) {
+  try {
+    const res = await fetch(`${FIREBASE_DB_URL}/ipsLogged/${ip}.json`);
+    return await res.json() !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function saveIPOnce(ip) {
+  try {
+    await fetch(`${FIREBASE_DB_URL}/ipsLogged/${ip}.json`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(true)
+    });
+  } catch {}
+}
+
+/* ===========================
+      DRAWING TOOL
+=========================== */
+let drawing = false;
+
+canvas.addEventListener("mousedown", e => {
+  if (e.button === 0) {
+    drawing = true;
+    drawAtEvent(e);
+  }
+});
+
+window.addEventListener("mouseup", () => drawing = false);
+
+canvas.addEventListener("mousemove", e => {
+  if (drawing) drawAtEvent(e);
+});
+
+function drawAtEvent(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) / scale);
+  const y = Math.floor((e.clientY - rect.top) / scale);
+  const size = parseInt(brushSizeEl.value);
+
+  drawBrush(x, y, size, currentColor);
+  saveBrushStroke(x, y, size, currentColor);
+}
+
+function drawBrush(cx, cy, size, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(cx, cy, size, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+async function saveBrushStroke(x, y, size, color) {
+  if (!(await ipAlreadyLogged(userIP))) {
+    await saveIPOnce(userIP);
+  }
+
+  fetch(`${FIREBASE_DB_URL}/draws.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      x, y, size, color,
+      time: Date.now()
+    })
   }).catch(console.error);
 }
 
-// Cooldown display
-setInterval(() => {
-  const remaining = Math.max(0, placeInterval - (Date.now() - lastPlaced));
-  cooldownEl.textContent = remaining <= 0 ? 'Ready' : `Cooldown: ${Math.ceil(remaining / 1000)}s`;
-}, 1000);
-
-// Load all pixels on startup
-async function loadPixels(){
+/* ===========================
+      LOAD EXISTING STROKES
+=========================== */
+async function loadStrokes() {
   try {
-    const resp = await fetch(`${FIREBASE_DB_URL}/pixels.json`);
+    const resp = await fetch(`${FIREBASE_DB_URL}/draws.json`);
     const data = await resp.json();
-    if(data) {
-      Object.values(data).forEach(p => {
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.x, p.y, 1, 1);
-      });
-    }
+    if (!data) return;
+
+    Object.values(data).forEach(d => {
+      drawBrush(d.x, d.y, d.size, d.color);
+    });
   } catch (e) {
     console.error(e);
   }
 }
-loadPixels();
 
-// Realtime updates every 3 seconds
-setInterval(loadPixels, 3000);
+loadStrokes();
 
-// Outline pixel under mouse
-function redrawOutline(x, y){
-  // Clear previous outline (redraw pixel underneath)
-  // To be efficient, we'll redraw only that pixel area:
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight); // clear all to force reload? Too slow.
-  // Instead: We'll just redraw all pixels periodically, and draw outline dynamically.
+/* Sync every 3 seconds */
+setInterval(loadStrokes, 3000);
 
-  // So here we just redraw outline on top of canvas:
-  // We'll use an overlay canvas for outline to not clear base canvas repeatedly.
-
-  // Let's implement overlay canvas for outline:
-}
-  
-// Overlay canvas for outline (to avoid clearing base canvas)
-let overlay = document.createElement('canvas');
-overlay.width = canvasWidth;
-overlay.height = canvasHeight;
-overlay.style.position = 'absolute';
-overlay.style.top = '0';
-overlay.style.left = '0';
-overlay.style.pointerEvents = 'none';
-overlay.style.zIndex = '10';
-overlay.style.transformOrigin = '0 0';
-overlay.style.imageRendering = 'pixelated';
-document.getElementById('canvasContainer').appendChild(overlay);
-const octx = overlay.getContext('2d');
-
-function updateOverlayTransform(){
-  overlay.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
-}
-updateOverlayTransform();
-
-function redrawOutline(x, y){
-  octx.clearRect(0, 0, canvasWidth, canvasHeight);
-  if(x >= 0 && y >= 0 && x < canvasWidth && y < canvasHeight){
-    octx.strokeStyle = 'black';
-    octx.lineWidth = 1;
-    octx.strokeRect(x + 0.5, y + 0.5, 1, 1);
-  }
-}
-
-// Sync overlay transform with base canvas on pan/zoom
-function syncTransforms(){
-  updateTransform();
-  updateOverlayTransform();
-}
-canvasContainer = document.getElementById('canvasContainer');
-['wheel','mousemove','mouseup','mousedown'].forEach(ev => {
-  canvas.addEventListener(ev, syncTransforms);
-});
-window.addEventListener('resize', syncTransforms);
-window.addEventListener('mouseup', () => { isPanning = false; canvas.style.cursor = 'crosshair'; });
-
-
-// Admin IP check for faster placement
-async function checkAdmin(){
-  try{
-    const resp = await fetch('https://api.ipify.org?format=json');
-    const ip = (await resp.json()).ip;
-    if(ip === adminIP){
-      placeInterval = 1000;
-      cooldownEl.textContent = 'Admin Mode';
-    }
-  }catch{}
-}
-checkAdmin();
 </script>
-
 </body>
 </html>
