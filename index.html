@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-<title>LAN Drawing Board</title>
+<title>LAN Drawing Board (Instant Sync)</title>
 
 <style>
   html, body {
@@ -16,7 +16,6 @@
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 80px;
     background: #fff;
-    cursor: crosshair;
     overflow: hidden;
   }
   canvas {
@@ -32,19 +31,28 @@
     background: #fff;
     border-top: 1px solid #ccc;
     display: flex;
-    flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 6px;
+    gap: 20px;
     padding: 6px;
+  }
+  .toolButton {
+    padding: 10px 18px;
+    border-radius: 6px;
+    border: 1px solid #aaa;
+    cursor: pointer;
+    user-select: none;
+  }
+  .toolButton.active {
+    background: #ddd;
   }
   #paletteContainer {
     display: flex;
     gap: 6px;
   }
   .color {
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     border-radius: 4px;
     border: 2px solid transparent;
     cursor: pointer;
@@ -61,31 +69,43 @@
 <body>
 
 <div id="canvasContainer">
-  <canvas id="canvas" width="3000" height="2000"></canvas>
+  <canvas id="canvas" width="5000" height="4000"></canvas>
 </div>
 
 <div id="toolbar">
   <div id="paletteContainer"></div>
   <div>
-    Brush Size:
-    <input type="range" id="brushSize" min="1" max="20" value="1">
+    Size:
+    <input type="range" id="brushSize" min="2" max="30" value="6">
   </div>
+
+  <div id="pencilBtn" class="toolButton active">Pencil</div>
+  <div id="panBtn" class="toolButton">Pan</div>
 </div>
 
 <script>
-/* === CONFIG === */
+/* CONFIG */
 const FIREBASE_DB_URL = "https://drawing-ce2f6-default-rtdb.firebaseio.com";
 
-/* === INITIALIZE CANVAS === */
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const brushSizeEl = document.getElementById("brushSize");
 const paletteContainer = document.getElementById("paletteContainer");
-let userIP = "unknown";
+let currentTool = "pencil";
 
-/* ===========================
-      PALETTE
-=========================== */
+const pencilBtn = document.getElementById("pencilBtn");
+const panBtn = document.getElementById("panBtn");
+
+pencilBtn.onclick = () => switchTool("pencil");
+panBtn.onclick = () => switchTool("pan");
+
+function switchTool(t) {
+  currentTool = t;
+  pencilBtn.classList.toggle("active", t === "pencil");
+  panBtn.classList.toggle("active", t === "pan");
+}
+
+/* PALETTE */
 const colors = [
   "#6D001A","#BE0039","#FF4500","#FFA800","#FFD635","#FFF8B8","#00A368","#00CC78",
   "#7EED56","#00756F","#009EAA","#00CCC0","#2450A4","#3690EA","#51E9F4","#493AC1",
@@ -94,27 +114,26 @@ const colors = [
 ];
 
 let currentColor = colors[0];
-
 function drawPalette() {
   paletteContainer.innerHTML = "";
   colors.forEach(c => {
     const div = document.createElement("div");
     div.className = "color" + (c === currentColor ? " active" : "");
     div.style.backgroundColor = c;
-    div.addEventListener("click", () => {
+    div.onclick = () => {
       currentColor = c;
       document.querySelectorAll(".color").forEach(el => el.classList.remove("active"));
       div.classList.add("active");
-    });
+    };
     paletteContainer.appendChild(div);
   });
 }
 drawPalette();
 
-/* ===========================
-      PAN + ZOOM
-=========================== */
-let scale = 1, tx = 0, ty = 0;
+/* PAN + ZOOM */
+let scale = 1;
+let tx = 0, ty = 0;
+
 function updateTransform() {
   canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
 }
@@ -122,35 +141,17 @@ updateTransform();
 
 let isPanning = false;
 let panStartX = 0, panStartY = 0, lastTx = 0, lastTy = 0;
-let spaceDown = false;
-
-window.addEventListener("keydown", e => {
-  if (e.code === "Space") {
-    spaceDown = true;
-    canvas.style.cursor = "grab";
-  }
-});
-window.addEventListener("keyup", e => {
-  if (e.code === "Space") {
-    spaceDown = false;
-    canvas.style.cursor = "crosshair";
-  }
-});
 
 canvas.addEventListener("mousedown", e => {
-  if (e.button === 2 || spaceDown) {
+  if (currentTool === "pan") {
     isPanning = true;
     panStartX = e.clientX;
     panStartY = e.clientY;
     lastTx = tx;
     lastTy = ty;
-    canvas.style.cursor = "grabbing";
   }
 });
-window.addEventListener("mouseup", () => {
-  isPanning = false;
-  canvas.style.cursor = spaceDown ? "grab" : "crosshair";
-});
+window.addEventListener("mouseup", () => isPanning = false);
 window.addEventListener("mousemove", e => {
   if (isPanning) {
     tx = lastTx + (e.clientX - panStartX);
@@ -166,7 +167,7 @@ canvas.addEventListener("wheel", e => {
   const my = e.clientY - rect.top;
 
   const factor = e.deltaY > 0 ? 0.9 : 1.1;
-  const newScale = Math.min(Math.max(0.1, scale * factor), 20);
+  const newScale = Math.min(Math.max(0.15, scale * factor)), 12);
 
   tx = mx - (mx - tx) * (newScale / scale);
   ty = my - (my - ty) * (newScale / scale);
@@ -175,55 +176,18 @@ canvas.addEventListener("wheel", e => {
   updateTransform();
 }, { passive: false });
 
-canvas.addEventListener("contextmenu", e => e.preventDefault());
-
-/* ===========================
-      IP LOGGING (ONCE)
-=========================== */
-async function fetchIP() {
-  try {
-    const r = await fetch("https://api.ipify.org?format=json");
-    const j = await r.json();
-    userIP = j.ip;
-  } catch {}
-}
-fetchIP();
-
-async function ipAlreadyLogged(ip) {
-  try {
-    const res = await fetch(`${FIREBASE_DB_URL}/ipsLogged/${ip}.json`);
-    return await res.json() !== null;
-  } catch {
-    return false;
-  }
-}
-
-async function saveIPOnce(ip) {
-  try {
-    await fetch(`${FIREBASE_DB_URL}/ipsLogged/${ip}.json`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(true)
-    });
-  } catch {}
-}
-
-/* ===========================
-      DRAWING TOOL
-=========================== */
+/* DRAWING (NO CIRCLES — RAW PIXELS) */
 let drawing = false;
 
 canvas.addEventListener("mousedown", e => {
-  if (e.button === 0) {
-    drawing = true;
-    drawAtEvent(e);
-  }
+  if (currentTool !== "pencil") return;
+  if (e.button !== 0) return;
+  drawing = true;
+  drawAtEvent(e);
 });
-
 window.addEventListener("mouseup", () => drawing = false);
-
 canvas.addEventListener("mousemove", e => {
-  if (drawing) drawAtEvent(e);
+  if (drawing && currentTool === "pencil") drawAtEvent(e);
 });
 
 function drawAtEvent(e) {
@@ -232,54 +196,40 @@ function drawAtEvent(e) {
   const y = Math.floor((e.clientY - rect.top) / scale);
   const size = parseInt(brushSizeEl.value);
 
-  drawBrush(x, y, size, currentColor);
-  saveBrushStroke(x, y, size, currentColor);
+  drawPixelStroke(x, y, size, currentColor);
+  sendStroke(x, y, size, currentColor);
 }
 
-function drawBrush(cx, cy, size, color) {
+function drawPixelStroke(cx, cy, size, color) {
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(cx, cy, size, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.fillRect(cx - size/2, cy - size/2, size, size);
 }
 
-async function saveBrushStroke(x, y, size, color) {
-  if (!(await ipAlreadyLogged(userIP))) {
-    await saveIPOnce(userIP);
-  }
-
+/* INSTANT SYNC — LONGPOLL STREAM */
+async function sendStroke(x, y, size, color) {
   fetch(`${FIREBASE_DB_URL}/draws.json`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      x, y, size, color,
-      time: Date.now()
-    })
-  }).catch(console.error);
+    body: JSON.stringify({ x, y, size, color, time: Date.now() })
+  }).catch(()=>{});
 }
 
-/* ===========================
-      LOAD EXISTING STROKES
-=========================== */
-async function loadStrokes() {
-  try {
-    const resp = await fetch(`${FIREBASE_DB_URL}/draws.json`);
-    const data = await resp.json();
-    if (!data) return;
+async function startRealtime() {
+  const url = `${FIREBASE_DB_URL}/draws.json?orderBy=\"time\"&limitToLast=1`;
 
-    Object.values(data).forEach(d => {
-      drawBrush(d.x, d.y, d.size, d.color);
-    });
-  } catch (e) {
-    console.error(e);
+  while (true) {
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data) {
+        const d = Object.values(data)[0];
+        drawPixelStroke(d.x, d.y, d.size, d.color);
+      }
+    } catch{}
+    await new Promise(r => setTimeout(r, 100));
   }
 }
-
-loadStrokes();
-
-/* Sync every 3 seconds */
-setInterval(loadStrokes, 3000);
-
+startRealtime();
 </script>
 </body>
 </html>
