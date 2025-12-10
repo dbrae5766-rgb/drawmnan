@@ -267,6 +267,7 @@ canvas.addEventListener("mousedown", e => {
   if (currentTool !== "pencil" && currentTool !== "eraser") return;
   if (e.button !== 0) return;
   drawing = true;
+  isDrawingLocally = true;
   
   const coords = getCanvasCoords(e);
   lastX = coords.x;
@@ -278,6 +279,7 @@ canvas.addEventListener("mousedown", e => {
 
 window.addEventListener("mouseup", () => {
   drawing = false;
+  isDrawingLocally = false;
   lastX = null;
   lastY = null;
 });
@@ -345,9 +347,11 @@ function drawBrushStroke(x, y, size, color) {
 }
 
 /* INSTANT SYNC */
+let isDrawingLocally = false;
+
 async function sendStroke(x, y, size, color) {
   try {
-    await fetch(`${FIREBASE_DB_URL}/draws.json`, {
+    await fetch(`${FIREBASE_DB_URL}/strokes.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ x, y, size, color, time: Date.now() })
@@ -357,19 +361,38 @@ async function sendStroke(x, y, size, color) {
   }
 }
 
-async function startRealtime() {
-  const url = `${FIREBASE_DB_URL}/draws.json?orderBy="time"&limitToLast=1`;
-  let lastTime = Date.now();
+// Load existing canvas state on startup
+async function loadCanvas() {
+  try {
+    const res = await fetch(`${FIREBASE_DB_URL}/strokes.json?orderBy="time"`);
+    const data = await res.json();
+    if (data) {
+      const strokes = Object.values(data).sort((a, b) => a.time - b.time);
+      strokes.forEach(d => {
+        drawBrushStroke(d.x, d.y, d.size, d.color);
+      });
+    }
+  } catch(e) {
+    console.log("Failed to load canvas:", e);
+  }
+}
 
+async function startRealtime() {
+  let lastTime = Date.now() - 5000; // Start 5 seconds in the past to catch recent strokes
+  
   while (true) {
     try {
+      const url = `${FIREBASE_DB_URL}/strokes.json?orderBy="time"&startAt=${lastTime}`;
       const res = await fetch(url);
       const data = await res.json();
+      
       if (data) {
-        const entries = Object.values(data);
-        entries.forEach(d => {
-          if (d.time > lastTime) {
+        const strokes = Object.values(data).sort((a, b) => a.time - b.time);
+        strokes.forEach(d => {
+          if (d.time > lastTime && !isDrawingLocally) {
             drawBrushStroke(d.x, d.y, d.size, d.color);
+          }
+          if (d.time > lastTime) {
             lastTime = d.time;
           }
         });
@@ -377,10 +400,13 @@ async function startRealtime() {
     } catch(e) {
       console.log("Realtime fetch failed:", e);
     }
-    await new Promise(r => setTimeout(r, 100));
+    await new Promise(r => setTimeout(r, 50));
   }
 }
-startRealtime();
+
+loadCanvas().then(() => {
+  startRealtime();
+});
 
 // Set initial cursor
 canvas.style.cursor = "crosshair";
