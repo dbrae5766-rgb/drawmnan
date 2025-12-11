@@ -16,6 +16,16 @@
     left: 0; top: 0;
     touch-action: none;
     background: white;
+    cursor: crosshair;
+  }
+  #canvas.pan-mode {
+    cursor: grab;
+  }
+  #canvas.pan-mode:active {
+    cursor: grabbing;
+  }
+  #canvas.text-mode {
+    cursor: text;
   }
   #toolbar {
     position: fixed;
@@ -44,6 +54,7 @@
   .tool-btn {
     padding: 6px 10px;
     margin-right: 5px;
+    margin-bottom: 5px;
     border-radius: 5px;
     border: 1px solid #444;
     cursor: pointer;
@@ -62,12 +73,23 @@
     font-size: 12px;
     opacity: .7;
   }
+  #textInput {
+    position: absolute;
+    display: none;
+    padding: 5px;
+    border: 2px solid #000;
+    background: white;
+    font-family: Arial, sans-serif;
+    outline: none;
+    z-index: 30;
+  }
 </style>
 </head>
 
 <body>
 
 <canvas id="canvas"></canvas>
+<input type="text" id="textInput" />
 
 <div id="toolbar">
   <div id="colorPalette"></div>
@@ -78,7 +100,10 @@
   <br><br>
 
   <button id="drawBtn" class="tool-btn active">Draw</button>
+  <button id="textBtn" class="tool-btn">Text</button>
   <button id="panBtn" class="tool-btn">Pan</button>
+
+  <br>
 
   <button id="undoBtn" class="tool-btn">Undo</button>
   <button id="redoBtn" class="tool-btn">Redo</button>
@@ -144,10 +169,12 @@ checkIP();
 --------------------------- */
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const textInput = document.getElementById("textInput");
 
 function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  rebuildCanvas();
 }
 resize();
 window.addEventListener("resize", resize);
@@ -159,6 +186,9 @@ let translateX = 0;
 let translateY = 0;
 let currentTool = "draw";
 let isDrawing = false;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
 
 /* ---------------------------
      Color Palette
@@ -190,25 +220,43 @@ colors.forEach(c => {
 
 const sizeSlider = document.getElementById("sizeSlider");
 const sizeValue  = document.getElementById("sizeValue");
+const drawBtn = document.getElementById("drawBtn");
+const textBtn = document.getElementById("textBtn");
+const panBtn = document.getElementById("panBtn");
+
 sizeSlider.oninput = () => {
   brushSize = Number(sizeSlider.value);
   sizeValue.textContent = brushSize;
 };
 
-document.getElementById("drawBtn").onclick = () => {
+drawBtn.onclick = () => {
   currentTool = "draw";
+  canvas.className = "";
   drawBtn.classList.add("active");
+  textBtn.classList.remove("active");
   panBtn.classList.remove("active");
 };
 
-document.getElementById("panBtn").onclick = () => {
+textBtn.onclick = () => {
+  currentTool = "text";
+  canvas.className = "text-mode";
+  textBtn.classList.add("active");
+  drawBtn.classList.remove("active");
+  panBtn.classList.remove("active");
+};
+
+panBtn.onclick = () => {
   currentTool = "pan";
+  canvas.className = "pan-mode";
   panBtn.classList.add("active");
   drawBtn.classList.remove("active");
+  textBtn.classList.remove("active");
 };
 
 document.getElementById("clearBtn").onclick = () => {
-  remove(LINES);
+  if (confirm("Clear the entire canvas? This will clear all drawings for everyone.")) {
+    remove(LINES);
+  }
 };
 
 document.getElementById("undoBtn").onclick = undo;
@@ -221,36 +269,54 @@ function transformX(x) { return (x - translateX) / scale; }
 function transformY(y) { return (y - translateY) / scale; }
 
 function drawLineLocal(l) {
-  ctx.strokeStyle = l.color;
-  ctx.lineWidth = l.size;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(l.x1, l.y1);
-  ctx.lineTo(l.x2, l.y2);
-  ctx.stroke();
+  ctx.save();
+  ctx.translate(translateX, translateY);
+  ctx.scale(scale, scale);
+  
+  if (l.type === "text") {
+    ctx.fillStyle = l.color;
+    ctx.font = `${l.size}px Arial`;
+    ctx.fillText(l.text, l.x, l.y);
+  } else {
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = l.size;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+  }
+  
+  ctx.restore();
 }
 
 /* ---------------------------
-     Local History
+     Local History (Per Session)
 --------------------------- */
-let undoStack = [];
-let redoStack = [];
+let myActions = []; // Only my drawing/text actions
+let allLines = {}; // All lines from Firebase
 
 function undo() {
-  if (!undoStack.length) return;
-  redoStack.push(undoStack.pop());
-  rebuildCanvas();
+  if (myActions.length === 0) return;
+  
+  const lastAction = myActions[myActions.length - 1];
+  
+  // Remove from Firebase
+  if (lastAction.firebaseKey) {
+    remove(ref(db, "lines/" + lastAction.firebaseKey));
+  }
+  
+  myActions.pop();
 }
 
 function redo() {
-  if (!redoStack.length) return;
-  undoStack.push(redoStack.pop());
-  rebuildCanvas();
+  // Redo is more complex with Firebase - simplified version
+  // We won't implement full redo to keep it simple
 }
 
 function rebuildCanvas() {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  undoStack.forEach(drawLineLocal);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  Object.values(allLines).forEach(drawLineLocal);
 }
 
 /* ---------------------------
@@ -260,39 +326,120 @@ function rebuildCanvas() {
 let lastX = 0, lastY = 0;
 
 canvas.onpointerdown = e => {
-  if (currentTool === "pan") return;
+  if (currentTool === "pan") {
+    isPanning = true;
+    panStartX = e.clientX - translateX;
+    panStartY = e.clientY - translateY;
+    return;
+  }
 
-  isDrawing = true;
-  const x = transformX(e.clientX);
-  const y = transformY(e.clientY);
+  if (currentTool === "text") {
+    const x = transformX(e.clientX);
+    const y = transformY(e.clientY);
+    
+    textInput.style.display = "block";
+    textInput.style.left = e.clientX + "px";
+    textInput.style.top = e.clientY + "px";
+    textInput.style.fontSize = brushSize + "px";
+    textInput.style.color = currentColor;
+    textInput.value = "";
+    textInput.focus();
+    
+    textInput.onkeydown = (evt) => {
+      if (evt.key === "Enter") {
+        const text = textInput.value.trim();
+        if (text) {
+          const textObj = {
+            type: "text",
+            text: text,
+            x: x,
+            y: y,
+            color: currentColor,
+            size: brushSize,
+            session: sessionId
+          };
+          
+          const newRef = push(LINES, textObj);
+          myActions.push({ firebaseKey: newRef.key, ...textObj });
+        }
+        textInput.style.display = "none";
+        textInput.value = "";
+      } else if (evt.key === "Escape") {
+        textInput.style.display = "none";
+        textInput.value = "";
+      }
+    };
+    
+    return;
+  }
 
-  lastX = x; lastY = y;
+  if (currentTool === "draw") {
+    isDrawing = true;
+    const x = transformX(e.clientX);
+    const y = transformY(e.clientY);
+    lastX = x; 
+    lastY = y;
+  }
 };
 
 canvas.onpointermove = e => {
+  if (isPanning) {
+    translateX = e.clientX - panStartX;
+    translateY = e.clientY - panStartY;
+    rebuildCanvas();
+    return;
+  }
+
   if (!isDrawing) return;
 
   const x = transformX(e.clientX);
   const y = transformY(e.clientY);
 
   const line = {
+    type: "line",
     x1: lastX, y1: lastY,
     x2: x, y2: y,
     color: currentColor,
-    size: brushSize
+    size: brushSize,
+    session: sessionId
   };
 
-  undoStack.push(line);
-  push(LINES, line);
-
-  drawLineLocal(line);
+  const newRef = push(LINES, line);
+  myActions.push({ firebaseKey: newRef.key, ...line });
 
   lastX = x;
   lastY = y;
 };
 
-canvas.onpointerup = () => isDrawing = false;
-canvas.onpointerleave = () => isDrawing = false;
+canvas.onpointerup = () => {
+  isDrawing = false;
+  isPanning = false;
+};
+
+canvas.onpointerleave = () => {
+  isDrawing = false;
+  isPanning = false;
+};
+
+// Zoom with mouse wheel
+canvas.onwheel = (e) => {
+  e.preventDefault();
+  
+  const mouseX = e.clientX;
+  const mouseY = e.clientY;
+  
+  const oldScale = scale;
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  scale *= delta;
+  scale = Math.max(0.1, Math.min(scale, 5));
+  
+  // Adjust translate to zoom towards mouse
+  translateX = mouseX - (mouseX - translateX) * (scale / oldScale);
+  translateY = mouseY - (mouseY - translateY) * (scale / oldScale);
+  
+  document.getElementById("zoomInfo").textContent = `Zoom: ${Math.round(scale * 100)}%`;
+  rebuildCanvas();
+};
 
 /* ---------------------------
      Firebase Real-Time Sync
@@ -300,8 +447,7 @@ canvas.onpointerleave = () => isDrawing = false;
 
 onValue(LINES, snap => {
   const data = snap.val();
-  undoStack = data ? Object.values(data) : [];
-  redoStack = [];
+  allLines = data || {};
   rebuildCanvas();
 });
 
