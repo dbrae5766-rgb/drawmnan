@@ -62,12 +62,23 @@
     font-size: 12px;
     opacity: .7;
   }
+  #textInput {
+    position: absolute;
+    display: none;
+    padding: 5px;
+    border: 2px solid #000;
+    background: white;
+    font-family: Arial, sans-serif;
+    outline: none;
+    z-index: 30;
+  }
 </style>
 </head>
 
 <body>
 
 <canvas id="canvas"></canvas>
+<input type="text" id="textInput" />
 
 <div id="toolbar">
   <div id="colorPalette"></div>
@@ -78,6 +89,7 @@
   <br><br>
 
   <button id="drawBtn" class="tool-btn active">Draw</button>
+  <button id="textBtn" class="tool-btn">Text</button>
   <button id="panBtn" class="tool-btn">Pan</button>
 
   <button id="undoBtn" class="tool-btn">Undo</button>
@@ -144,6 +156,7 @@ checkIP();
 --------------------------- */
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
+const textInput = document.getElementById("textInput");
 
 function resize() {
   canvas.width = window.innerWidth;
@@ -159,6 +172,9 @@ let translateX = 0;
 let translateY = 0;
 let currentTool = "draw";
 let isDrawing = false;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
 
 /* ---------------------------
      Color Palette
@@ -198,6 +214,14 @@ sizeSlider.oninput = () => {
 document.getElementById("drawBtn").onclick = () => {
   currentTool = "draw";
   drawBtn.classList.add("active");
+  textBtn.classList.remove("active");
+  panBtn.classList.remove("active");
+};
+
+document.getElementById("textBtn").onclick = () => {
+  currentTool = "text";
+  textBtn.classList.add("active");
+  drawBtn.classList.remove("active");
   panBtn.classList.remove("active");
 };
 
@@ -205,6 +229,7 @@ document.getElementById("panBtn").onclick = () => {
   currentTool = "pan";
   panBtn.classList.add("active");
   drawBtn.classList.remove("active");
+  textBtn.classList.remove("active");
 };
 
 document.getElementById("clearBtn").onclick = () => {
@@ -221,13 +246,19 @@ function transformX(x) { return (x - translateX) / scale; }
 function transformY(y) { return (y - translateY) / scale; }
 
 function drawLineLocal(l) {
-  ctx.strokeStyle = l.color;
-  ctx.lineWidth = l.size;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(l.x1, l.y1);
-  ctx.lineTo(l.x2, l.y2);
-  ctx.stroke();
+  if (l.type === "text") {
+    ctx.fillStyle = l.color;
+    ctx.font = `${l.size}px Arial`;
+    ctx.fillText(l.text, l.x, l.y);
+  } else {
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = l.size;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+  }
 }
 
 /* ---------------------------
@@ -260,7 +291,53 @@ function rebuildCanvas() {
 let lastX = 0, lastY = 0;
 
 canvas.onpointerdown = e => {
-  if (currentTool === "pan") return;
+  if (currentTool === "pan") {
+    isPanning = true;
+    panStartX = e.clientX - translateX;
+    panStartY = e.clientY - translateY;
+    return;
+  }
+
+  if (currentTool === "text") {
+    const x = transformX(e.clientX);
+    const y = transformY(e.clientY);
+    
+    textInput.style.display = "block";
+    textInput.style.left = e.clientX + "px";
+    textInput.style.top = e.clientY + "px";
+    textInput.style.fontSize = brushSize + "px";
+    textInput.style.color = currentColor;
+    textInput.value = "";
+    textInput.focus();
+    
+    textInput.onkeydown = (evt) => {
+      if (evt.key === "Enter") {
+        const text = textInput.value.trim();
+        if (text) {
+          const textObj = {
+            type: "text",
+            text: text,
+            x: x,
+            y: y,
+            color: currentColor,
+            size: brushSize
+          };
+          
+          undoStack.push(textObj);
+          push(LINES, textObj);
+          
+          drawLineLocal(textObj);
+        }
+        textInput.style.display = "none";
+        textInput.value = "";
+      } else if (evt.key === "Escape") {
+        textInput.style.display = "none";
+        textInput.value = "";
+      }
+    };
+    
+    return;
+  }
 
   isDrawing = true;
   const x = transformX(e.clientX);
@@ -270,6 +347,13 @@ canvas.onpointerdown = e => {
 };
 
 canvas.onpointermove = e => {
+  if (isPanning) {
+    translateX = e.clientX - panStartX;
+    translateY = e.clientY - panStartY;
+    rebuildCanvas();
+    return;
+  }
+
   if (!isDrawing) return;
 
   const x = transformX(e.clientX);
@@ -291,8 +375,15 @@ canvas.onpointermove = e => {
   lastY = y;
 };
 
-canvas.onpointerup = () => isDrawing = false;
-canvas.onpointerleave = () => isDrawing = false;
+canvas.onpointerup = () => {
+  isDrawing = false;
+  isPanning = false;
+};
+
+canvas.onpointerleave = () => {
+  isDrawing = false;
+  isPanning = false;
+};
 
 /* ---------------------------
      Firebase Real-Time Sync
