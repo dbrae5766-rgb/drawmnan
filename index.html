@@ -292,9 +292,6 @@ function rebuildCanvas() {
 let lastX = 0, lastY = 0;
 
 canvas.onpointerdown = e => {
-  // Prevent clicking on toolbar from affecting canvas
-  if (e.target !== canvas) return;
-  
   if (currentTool === "pan") {
     isPanning = true;
     panStartX = e.clientX - translateX;
@@ -314,8 +311,12 @@ canvas.onpointerdown = e => {
     textInput.style.fontSize = Math.max(16, brushSize) + "px";
     textInput.style.color = currentColor;
     document.body.appendChild(textInput);
-    textInput.focus();
-    textInput.select();
+    
+    // Delay focus to prevent immediate blur
+    setTimeout(() => {
+      textInput.focus();
+      textInput.select();
+    }, 10);
     
     textInput.onkeydown = (evt) => {
       if (evt.key === "Enter") {
@@ -349,6 +350,9 @@ canvas.onpointerdown = e => {
         }
       }, 200);
     };
+    
+    // Prevent the canvas click from immediately blurring the input
+    e.stopPropagation();
     
     return;
   }
