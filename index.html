@@ -16,7 +16,6 @@
     left: 0; top: 0;
     touch-action: none;
     background: white;
-    cursor: crosshair;
   }
   #canvas.pan-mode {
     cursor: grab;
@@ -54,7 +53,6 @@
   .tool-btn {
     padding: 6px 10px;
     margin-right: 5px;
-    margin-bottom: 5px;
     border-radius: 5px;
     border: 1px solid #444;
     cursor: pointer;
@@ -102,8 +100,6 @@
   <button id="drawBtn" class="tool-btn active">Draw</button>
   <button id="textBtn" class="tool-btn">Text</button>
   <button id="panBtn" class="tool-btn">Pan</button>
-
-  <br>
 
   <button id="undoBtn" class="tool-btn">Undo</button>
   <button id="redoBtn" class="tool-btn">Redo</button>
@@ -254,9 +250,7 @@ panBtn.onclick = () => {
 };
 
 document.getElementById("clearBtn").onclick = () => {
-  if (confirm("Clear the entire canvas? This will clear all drawings for everyone.")) {
-    remove(LINES);
-  }
+  remove(LINES);
 };
 
 document.getElementById("undoBtn").onclick = undo;
@@ -269,10 +263,6 @@ function transformX(x) { return (x - translateX) / scale; }
 function transformY(y) { return (y - translateY) / scale; }
 
 function drawLineLocal(l) {
-  ctx.save();
-  ctx.translate(translateX, translateY);
-  ctx.scale(scale, scale);
-  
   if (l.type === "text") {
     ctx.fillStyle = l.color;
     ctx.font = `${l.size}px Arial`;
@@ -286,37 +276,34 @@ function drawLineLocal(l) {
     ctx.lineTo(l.x2, l.y2);
     ctx.stroke();
   }
-  
-  ctx.restore();
 }
 
 /* ---------------------------
-     Local History (Per Session)
+     Local History
 --------------------------- */
-let myActions = []; // Only my drawing/text actions
-let allLines = {}; // All lines from Firebase
+let undoStack = [];
+let redoStack = [];
+let myActionKeys = []; // Track keys of my actions only
 
 function undo() {
-  if (myActions.length === 0) return;
+  if (myActionKeys.length === 0) return;
   
-  const lastAction = myActions[myActions.length - 1];
-  
-  // Remove from Firebase
-  if (lastAction.firebaseKey) {
-    remove(ref(db, "lines/" + lastAction.firebaseKey));
-  }
-  
-  myActions.pop();
+  const lastKey = myActionKeys.pop();
+  remove(ref(db, "lines/" + lastKey));
+  redoStack.push(lastKey);
 }
 
 function redo() {
-  // Redo is more complex with Firebase - simplified version
-  // We won't implement full redo to keep it simple
+  if (redoStack.length === 0) return;
+  
+  const key = redoStack.pop();
+  // Redo not fully implemented - would need to restore data
+  myActionKeys.push(key);
 }
 
 function rebuildCanvas() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  Object.values(allLines).forEach(drawLineLocal);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  undoStack.forEach(drawLineLocal);
 }
 
 /* ---------------------------
@@ -360,7 +347,7 @@ canvas.onpointerdown = e => {
           };
           
           const newRef = push(LINES, textObj);
-          myActions.push({ firebaseKey: newRef.key, ...textObj });
+          myActionKeys.push(newRef.key);
         }
         textInput.style.display = "none";
         textInput.value = "";
@@ -373,13 +360,11 @@ canvas.onpointerdown = e => {
     return;
   }
 
-  if (currentTool === "draw") {
-    isDrawing = true;
-    const x = transformX(e.clientX);
-    const y = transformY(e.clientY);
-    lastX = x; 
-    lastY = y;
-  }
+  isDrawing = true;
+  const x = transformX(e.clientX);
+  const y = transformY(e.clientY);
+
+  lastX = x; lastY = y;
 };
 
 canvas.onpointermove = e => {
@@ -396,7 +381,6 @@ canvas.onpointermove = e => {
   const y = transformY(e.clientY);
 
   const line = {
-    type: "line",
     x1: lastX, y1: lastY,
     x2: x, y2: y,
     color: currentColor,
@@ -404,8 +388,11 @@ canvas.onpointermove = e => {
     session: sessionId
   };
 
+  undoStack.push(line);
   const newRef = push(LINES, line);
-  myActions.push({ firebaseKey: newRef.key, ...line });
+  myActionKeys.push(newRef.key);
+
+  drawLineLocal(line);
 
   lastX = x;
   lastY = y;
@@ -421,33 +408,14 @@ canvas.onpointerleave = () => {
   isPanning = false;
 };
 
-// Zoom with mouse wheel
-canvas.onwheel = (e) => {
-  e.preventDefault();
-  
-  const mouseX = e.clientX;
-  const mouseY = e.clientY;
-  
-  const oldScale = scale;
-  const delta = e.deltaY > 0 ? 0.9 : 1.1;
-  scale *= delta;
-  scale = Math.max(0.1, Math.min(scale, 5));
-  
-  // Adjust translate to zoom towards mouse
-  translateX = mouseX - (mouseX - translateX) * (scale / oldScale);
-  translateY = mouseY - (mouseY - translateY) * (scale / oldScale);
-  
-  document.getElementById("zoomInfo").textContent = `Zoom: ${Math.round(scale * 100)}%`;
-  rebuildCanvas();
-};
-
 /* ---------------------------
      Firebase Real-Time Sync
 --------------------------- */
 
 onValue(LINES, snap => {
   const data = snap.val();
-  allLines = data || {};
+  undoStack = data ? Object.values(data) : [];
+  redoStack = [];
   rebuildCanvas();
 });
 
