@@ -303,14 +303,22 @@ canvas.onpointerdown = e => {
     const x = transformX(e.clientX);
     const y = transformY(e.clientY);
     
-    const textInput = document.createElement("input");
-    textInput.type = "text";
+    const textInput = document.createElement("textarea");
     textInput.className = "text-input";
     textInput.style.left = e.clientX + "px";
     textInput.style.top = e.clientY + "px";
     textInput.style.fontSize = Math.max(16, brushSize) + "px";
     textInput.style.color = currentColor;
+    textInput.style.resize = "none";
+    textInput.style.overflow = "hidden";
+    textInput.rows = 1;
     document.body.appendChild(textInput);
+    
+    // Auto-resize textarea as user types
+    textInput.oninput = () => {
+      textInput.style.height = "auto";
+      textInput.style.height = textInput.scrollHeight + "px";
+    };
     
     // Delay focus to prevent immediate blur
     setTimeout(() => {
@@ -319,22 +327,28 @@ canvas.onpointerdown = e => {
     }, 10);
     
     textInput.onkeydown = (evt) => {
-      if (evt.key === "Enter") {
+      if (evt.key === "Enter" && !evt.shiftKey) {
+        evt.preventDefault();
         const text = textInput.value.trim();
         if (text) {
-          const textObj = {
-            type: "text",
-            text: text,
-            x: x,
-            y: y,
-            color: currentColor,
-            size: Math.max(16, brushSize)
-          };
-          
-          undoStack.push(textObj);
-          push(LINES, textObj);
-          
-          drawLineLocal(textObj);
+          const lines = text.split('\n');
+          lines.forEach((line, index) => {
+            if (line.trim()) {
+              const textObj = {
+                type: "text",
+                text: line,
+                x: x,
+                y: y + (index * Math.max(16, brushSize) * 1.2),
+                color: currentColor,
+                size: Math.max(16, brushSize)
+              };
+              
+              undoStack.push(textObj);
+              push(LINES, textObj);
+              
+              drawLineLocal(textObj);
+            }
+          });
         }
         textInput.remove();
       } else if (evt.key === "Escape") {
