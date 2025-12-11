@@ -17,15 +17,6 @@
     touch-action: none;
     background: white;
   }
-  #canvas.pan-mode {
-    cursor: grab;
-  }
-  #canvas.pan-mode:active {
-    cursor: grabbing;
-  }
-  #canvas.text-mode {
-    cursor: text;
-  }
   #toolbar {
     position: fixed;
     top: 10px; left: 10px;
@@ -71,23 +62,12 @@
     font-size: 12px;
     opacity: .7;
   }
-  #textInput {
-    position: absolute;
-    display: none;
-    padding: 5px;
-    border: 2px solid #000;
-    background: white;
-    font-family: Arial, sans-serif;
-    outline: none;
-    z-index: 30;
-  }
 </style>
 </head>
 
 <body>
 
 <canvas id="canvas"></canvas>
-<input type="text" id="textInput" />
 
 <div id="toolbar">
   <div id="colorPalette"></div>
@@ -98,7 +78,6 @@
   <br><br>
 
   <button id="drawBtn" class="tool-btn active">Draw</button>
-  <button id="textBtn" class="tool-btn">Text</button>
   <button id="panBtn" class="tool-btn">Pan</button>
 
   <button id="undoBtn" class="tool-btn">Undo</button>
@@ -165,12 +144,10 @@ checkIP();
 --------------------------- */
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
-const textInput = document.getElementById("textInput");
 
 function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-  rebuildCanvas();
 }
 resize();
 window.addEventListener("resize", resize);
@@ -182,9 +159,6 @@ let translateX = 0;
 let translateY = 0;
 let currentTool = "draw";
 let isDrawing = false;
-let isPanning = false;
-let panStartX = 0;
-let panStartY = 0;
 
 /* ---------------------------
      Color Palette
@@ -216,37 +190,21 @@ colors.forEach(c => {
 
 const sizeSlider = document.getElementById("sizeSlider");
 const sizeValue  = document.getElementById("sizeValue");
-const drawBtn = document.getElementById("drawBtn");
-const textBtn = document.getElementById("textBtn");
-const panBtn = document.getElementById("panBtn");
-
 sizeSlider.oninput = () => {
   brushSize = Number(sizeSlider.value);
   sizeValue.textContent = brushSize;
 };
 
-drawBtn.onclick = () => {
+document.getElementById("drawBtn").onclick = () => {
   currentTool = "draw";
-  canvas.className = "";
   drawBtn.classList.add("active");
-  textBtn.classList.remove("active");
   panBtn.classList.remove("active");
 };
 
-textBtn.onclick = () => {
-  currentTool = "text";
-  canvas.className = "text-mode";
-  textBtn.classList.add("active");
-  drawBtn.classList.remove("active");
-  panBtn.classList.remove("active");
-};
-
-panBtn.onclick = () => {
+document.getElementById("panBtn").onclick = () => {
   currentTool = "pan";
-  canvas.className = "pan-mode";
   panBtn.classList.add("active");
   drawBtn.classList.remove("active");
-  textBtn.classList.remove("active");
 };
 
 document.getElementById("clearBtn").onclick = () => {
@@ -263,19 +221,13 @@ function transformX(x) { return (x - translateX) / scale; }
 function transformY(y) { return (y - translateY) / scale; }
 
 function drawLineLocal(l) {
-  if (l.type === "text") {
-    ctx.fillStyle = l.color;
-    ctx.font = `${l.size}px Arial`;
-    ctx.fillText(l.text, l.x, l.y);
-  } else {
-    ctx.strokeStyle = l.color;
-    ctx.lineWidth = l.size;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(l.x1, l.y1);
-    ctx.lineTo(l.x2, l.y2);
-    ctx.stroke();
-  }
+  ctx.strokeStyle = l.color;
+  ctx.lineWidth = l.size;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(l.x1, l.y1);
+  ctx.lineTo(l.x2, l.y2);
+  ctx.stroke();
 }
 
 /* ---------------------------
@@ -283,22 +235,17 @@ function drawLineLocal(l) {
 --------------------------- */
 let undoStack = [];
 let redoStack = [];
-let myActionKeys = []; // Track keys of my actions only
 
 function undo() {
-  if (myActionKeys.length === 0) return;
-  
-  const lastKey = myActionKeys.pop();
-  remove(ref(db, "lines/" + lastKey));
-  redoStack.push(lastKey);
+  if (!undoStack.length) return;
+  redoStack.push(undoStack.pop());
+  rebuildCanvas();
 }
 
 function redo() {
-  if (redoStack.length === 0) return;
-  
-  const key = redoStack.pop();
-  // Redo not fully implemented - would need to restore data
-  myActionKeys.push(key);
+  if (!redoStack.length) return;
+  undoStack.push(redoStack.pop());
+  rebuildCanvas();
 }
 
 function rebuildCanvas() {
@@ -313,52 +260,7 @@ function rebuildCanvas() {
 let lastX = 0, lastY = 0;
 
 canvas.onpointerdown = e => {
-  if (currentTool === "pan") {
-    isPanning = true;
-    panStartX = e.clientX - translateX;
-    panStartY = e.clientY - translateY;
-    return;
-  }
-
-  if (currentTool === "text") {
-    const x = transformX(e.clientX);
-    const y = transformY(e.clientY);
-    
-    textInput.style.display = "block";
-    textInput.style.left = e.clientX + "px";
-    textInput.style.top = e.clientY + "px";
-    textInput.style.fontSize = brushSize + "px";
-    textInput.style.color = currentColor;
-    textInput.value = "";
-    textInput.focus();
-    
-    textInput.onkeydown = (evt) => {
-      if (evt.key === "Enter") {
-        const text = textInput.value.trim();
-        if (text) {
-          const textObj = {
-            type: "text",
-            text: text,
-            x: x,
-            y: y,
-            color: currentColor,
-            size: brushSize,
-            session: sessionId
-          };
-          
-          const newRef = push(LINES, textObj);
-          myActionKeys.push(newRef.key);
-        }
-        textInput.style.display = "none";
-        textInput.value = "";
-      } else if (evt.key === "Escape") {
-        textInput.style.display = "none";
-        textInput.value = "";
-      }
-    };
-    
-    return;
-  }
+  if (currentTool === "pan") return;
 
   isDrawing = true;
   const x = transformX(e.clientX);
@@ -368,13 +270,6 @@ canvas.onpointerdown = e => {
 };
 
 canvas.onpointermove = e => {
-  if (isPanning) {
-    translateX = e.clientX - panStartX;
-    translateY = e.clientY - panStartY;
-    rebuildCanvas();
-    return;
-  }
-
   if (!isDrawing) return;
 
   const x = transformX(e.clientX);
@@ -384,13 +279,11 @@ canvas.onpointermove = e => {
     x1: lastX, y1: lastY,
     x2: x, y2: y,
     color: currentColor,
-    size: brushSize,
-    session: sessionId
+    size: brushSize
   };
 
   undoStack.push(line);
-  const newRef = push(LINES, line);
-  myActionKeys.push(newRef.key);
+  push(LINES, line);
 
   drawLineLocal(line);
 
@@ -398,15 +291,8 @@ canvas.onpointermove = e => {
   lastY = y;
 };
 
-canvas.onpointerup = () => {
-  isDrawing = false;
-  isPanning = false;
-};
-
-canvas.onpointerleave = () => {
-  isDrawing = false;
-  isPanning = false;
-};
+canvas.onpointerup = () => isDrawing = false;
+canvas.onpointerleave = () => isDrawing = false;
 
 /* ---------------------------
      Firebase Real-Time Sync
