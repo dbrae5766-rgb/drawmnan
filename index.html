@@ -1,1 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>drawing thing</title>
 
+<style>
+  html, body {
+    margin: 0; padding: 0; overflow: hidden;
+    font-family: Arial, sans-serif;
+    background: #f0f0f0;
+  }
+  #canvas {
+    position: absolute;
+    left: 0; top: 0;
+    touch-action: none;
+    background: white;
+  }
+  #toolbar {
+    position: fixed;
+    top: 10px; left: 10px;
+    padding: 10px;
+    background: rgba(255,255,255,0.9);
+    border-radius: 10px;
+    box-shadow: 0 0 10px #0003;
+    z-index: 20;
+  }
+  #colorPalette {
+    display: grid;
+    grid-template-columns: repeat(8, 20px);
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .color-btn {
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid #3333;
+  }
+  .color-btn.active {
+    border: 2px solid #000;
+  }
+  .tool-btn {
+    padding: 6px 10px;
+    margin-right: 5px;
+    border-radius: 5px;
+    border: 1px solid #444;
+    cursor: pointer;
+    background: #eee;
+  }
+  .tool-btn.active {
+    background: #d0d0d0;
+  }
+  #zoomInfo {
+    margin-top: 5px;
+    font-size: 12px;
+    color: #333;
+  }
+  #status {
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: .7;
+  }
+  .text-input {
+    position: absolute;
+    padding: 5px;
+    border: 2px solid #000;
+    background: white;
+    font-family: Arial, sans-serif;
+    outline: none;
+    z-index: 30;
+    font-size: 16px;
+    min-width: 100px;
+  }
+</style>
+</head>
+
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="toolbar">
+  <div id="colorPalette"></div>
+  
+  <input type="range" id="sizeSlider" min="1" max="25" value="2">
+  <span id="sizeValue">2</span>
+
+  <br><br>
+
+  <button id="drawBtn" class="tool-btn active">Draw</button>
+  <button id="textBtn" class="tool-btn">Text</button>
+  <button id="panBtn" class="tool-btn">Pan</button>
+
+  <button id="undoBtn" class="tool-btn">Undo</button>
+  <button id="redoBtn" class="tool-btn">Redo</button>
+
+  <button id="clearBtn" class="tool-btn">Clear</button>
+
+  <div id="zoomInfo">Zoom: 100%</div>
+  <div id="status">Connecting…</div>
+</div>
+
+<script type="module">
+/* ---------------------------
+     Firebase Setup
+--------------------------- */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+import {
+  getDatabase, ref, onValue, push, update, set, remove
+} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "",
+  authDomain: "",
+  databaseURL: "https://drawing-ce2f6-default-rtdb.firebaseio.com",
+  projectId: "",
+  storageBucket: "",
+  messagingSenderId: "",
+  appId: ""
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+const LINES = ref(db, "lines");
+const CURSORS = ref(db, "cursors");
+const PRESENCE = ref(db, "presence");
+
+const sessionId = String(Date.now()) + "-" + Math.random().toString(36).slice(2,8);
+
+/* ---------------------------
+     IP Check for Max Size
+--------------------------- */
+let maxBrushSize = 25;
+
+async function checkIP() {
+  try {
+    const response = await fetch('https://api.ipify.org?format=json');
+    const data = await response.json();
+    const userIP = data.ip;
+    
+    if (userIP === '69.170.112.226' || userIP === '209.249.13.180') {
+      maxBrushSize = 500;
+      document.getElementById('sizeSlider').max = 500;
+    }
+  } catch (error) {
+    console.log('Could not fetch IP');
+  }
+}
+
+checkIP();
+
+/* ---------------------------
+     Canvas + UI Setup
+--------------------------- */
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+let currentColor = "#000000";
+let brushSize = 2;
+let scale = 1;
+let translateX = 0;
+let translateY = 0;
+let currentTool = "draw";
+let isDrawing = false;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+
+/* ---------------------------
+     Color Palette
+--------------------------- */
+
+const colors = [
+  "#FF0000","#00FF00","#0000FF","#FFFF00","#FF00FF","#00FFFF",
+  "#FFA500","#800080","#FFC0CB","#A52A2A","#808080","#000000",
+  "#FFFFFF","#008000","#000080","#800000"
+];
+
+const colorPalette = document.getElementById("colorPalette");
+colors.forEach(c => {
+  const div = document.createElement("div");
+  div.className = "color-btn";
+  div.style.backgroundColor = c;
+  div.onclick = () => {
+    currentColor = c;
+    document.querySelectorAll(".color-btn").forEach(x => x.classList.remove("active"));
+    div.classList.add("active");
+  };
+  if (c === "#000000") div.classList.add("active");
+  colorPalette.appendChild(div);
+});
+
+/* ---------------------------
+     UI Elements
+--------------------------- */
+
+const sizeSlider = document.getElementById("sizeSlider");
+const sizeValue  = document.getElementById("sizeValue");
+sizeSlider.oninput = () => {
+  brushSize = Number(sizeSlider.value);
+  sizeValue.textContent = brushSize;
+};
+
+document.getElementById("drawBtn").onclick = () => {
+  currentTool = "draw";
+  drawBtn.classList.add("active");
+  textBtn.classList.remove("active");
+  panBtn.classList.remove("active");
+};
+
+document.getElementById("textBtn").onclick = () => {
+  currentTool = "text";
+  textBtn.classList.add("active");
+  drawBtn.classList.remove("active");
+  panBtn.classList.remove("active");
+};
+
+document.getElementById("panBtn").onclick = () => {
+  currentTool = "pan";
+  panBtn.classList.add("active");
+  drawBtn.classList.remove("active");
+  textBtn.classList.remove("active");
+};
+
+document.getElementById("clearBtn").onclick = () => {
+  // Remove all text inputs
+  document.querySelectorAll('.text-input').forEach(input => input.remove());
+  remove(LINES);
+};
+
+document.getElementById("undoBtn").onclick = undo;
+document.getElementById("redoBtn").onclick = redo;
+
+/* ---------------------------
+     Draw Helpers
+--------------------------- */
+function transformX(x) { return (x - translateX) / scale; }
+function transformY(y) { return (y - translateY) / scale; }
+
+function drawLineLocal(l) {
+  if (l.type === "text") {
+    ctx.fillStyle = l.color;
+    ctx.font = `${l.size}px Arial`;
+    ctx.fillText(l.text, l.x, l.y);
+  } else {
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = l.size;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(l.x1, l.y1);
+    ctx.lineTo(l.x2, l.y2);
+    ctx.stroke();
+  }
+}
+
+/* ---------------------------
+     Local History
+--------------------------- */
+let undoStack = [];
+let redoStack = [];
+
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(undoStack.pop());
+  rebuildCanvas();
+}
+
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(redoStack.pop());
+  rebuildCanvas();
+}
+
+function rebuildCanvas() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  undoStack.forEach(drawLineLocal);
+}
+
+/* ---------------------------
+     Input
+--------------------------- */
+
+let lastX = 0, lastY = 0;
+
+canvas.onpointerdown = e => {
+  if (currentTool === "pan") {
+    isPanning = true;
+    panStartX = e.clientX - translateX;
+    panStartY = e.clientY - translateY;
+    return;
+  }
+
+  if (currentTool === "text") {
+    const x = transformX(e.clientX);
+    const y = transformY(e.clientY);
+    
+    const textInput = document.createElement("textarea");
+    textInput.className = "text-input";
+    textInput.style.left = e.clientX + "px";
+    textInput.style.top = e.clientY + "px";
+    textInput.style.fontSize = Math.max(16, brushSize) + "px";
+    textInput.style.color = currentColor;
+    textInput.style.resize = "none";
+    textInput.style.overflow = "hidden";
+    textInput.rows = 1;
+    document.body.appendChild(textInput);
+    
+    // Auto-resize textarea as user types
+    textInput.oninput = () => {
+      textInput.style.height = "auto";
+      textInput.style.height = textInput.scrollHeight + "px";
+    };
+    
+    // Delay focus to prevent immediate blur
+    setTimeout(() => {
+      textInput.focus();
+      textInput.select();
+    }, 10);
+    
+    textInput.onkeydown = (evt) => {
+      if (evt.key === "Enter" && !evt.shiftKey) {
+        evt.preventDefault();
+        const text = textInput.value.trim();
+        if (text) {
+          const lines = text.split('\n');
+          lines.forEach((line, index) => {
+            if (line.trim()) {
+              const textObj = {
+                type: "text",
+                text: line,
+                x: x,
+                y: y + (index * Math.max(16, brushSize) * 1.2),
+                color: currentColor,
+                size: Math.max(16, brushSize)
+              };
+              
+              undoStack.push(textObj);
+              push(LINES, textObj);
+              
+              drawLineLocal(textObj);
+            }
+          });
+        }
+        textInput.remove();
+      } else if (evt.key === "Escape") {
+        textInput.remove();
+      }
+    };
+    
+    textInput.onblur = (evt) => {
+      // Don't remove immediately, let user finish typing
+      setTimeout(() => {
+        if (document.body.contains(textInput)) {
+          textInput.remove();
+        }
+      }, 200);
+    };
+    
+    // Prevent the canvas click from immediately blurring the input
+    e.stopPropagation();
+    
+    return;
+  }
+
+  isDrawing = true;
+  const x = transformX(e.clientX);
+  const y = transformY(e.clientY);
+
+  lastX = x; lastY = y;
+};
+
+canvas.onpointermove = e => {
+  if (isPanning) {
+    translateX = e.clientX - panStartX;
+    translateY = e.clientY - panStartY;
+    rebuildCanvas();
+    return;
+  }
+
+  if (!isDrawing) return;
+
+  const x = transformX(e.clientX);
+  const y = transformY(e.clientY);
+
+  const line = {
+    x1: lastX, y1: lastY,
+    x2: x, y2: y,
+    color: currentColor,
+    size: brushSize
+  };
+
+  undoStack.push(line);
+  push(LINES, line);
+
+  drawLineLocal(line);
+
+  lastX = x;
+  lastY = y;
+};
+
+canvas.onpointerup = () => {
+  isDrawing = false;
+  isPanning = false;
+};
+
+canvas.onpointerleave = () => {
+  isDrawing = false;
+  isPanning = false;
+};
+
+/* ---------------------------
+     Firebase Real-Time Sync
+--------------------------- */
+
+onValue(LINES, snap => {
+  const data = snap.val();
+  undoStack = data ? Object.values(data) : [];
+  redoStack = [];
+  rebuildCanvas();
+});
+
+/* ---------------------------
+     Presence (Instant Connect)
+--------------------------- */
+
+set(ref(db, "presence/" + sessionId), {
+  active: true,
+  t: Date.now()
+});
+
+onValue(PRESENCE, () => {
+  document.getElementById("status").textContent = "Connected";
+});
+</script>
+
+</body>
+</html>
